@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>整理ボード</title>
+<style>
+  :root {
+    --bg: #eef0f3; --dot: #cfd4dc; --card: #fff; --line: #d0d5dd; --text: #1c2128; --sub: #667080;
+    --cell: #f1f3f6; --grid: #dfe3e9; --accent: #7b3fc4; --danger: #c0392b; --bar: #ffffffee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101318; --dot: #2a303a; --card: #1d2129; --line: #363d49; --text: #e6e9ee; --sub: #98a2b3;
+      --cell: #232831; --grid: #313844; --accent: #c39bff; --danger: #ff7b6b; --bar: #1d2129ee;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); overflow: hidden;
+         font: 14px/1.4 system-ui, -apple-system, "Hiragino Sans", sans-serif; }
+
+  /* ボード: スクロールできる広い作業面 */
+  #viewport { position: absolute; inset: 0; overflow: auto; }
+  #sizer { position: relative; }
+  #board { position: absolute; left: 0; top: 0; width: 6000px; height: 4000px; transform-origin: 0 0;
+           background-image: radial-gradient(var(--dot) 1px, transparent 1px); background-size: 24px 24px; }
+  #hint { position: absolute; left: 24px; top: 20px; color: var(--sub); font-size: 13px; pointer-events: none; }
+
+  .box { position: absolute; background: var(--card); border: 2px solid var(--line); border-radius: 8px;
+         padding: 6px; box-shadow: 0 1px 3px #0002; user-select: none; }
+  .box.sel { border-color: var(--accent); box-shadow: 0 2px 10px #0003; }
+  .box header { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; cursor: grab; }
+  .box header:active { cursor: grabbing; }
+  .grip { color: var(--sub); font-size: 14px; line-height: 1; padding: 2px; }
+  .box input { flex: 1; min-width: 0; font: inherit; font-size: 13px; color: inherit; background: transparent;
+               border: 1px solid transparent; border-radius: 4px; padding: 2px 4px; }
+  .box input:hover { border-color: var(--line); }
+  .box input:focus { border-color: var(--accent); outline: none; background: var(--card); }
+  .grid { background: var(--grid); border: 1px solid var(--grid); display: grid; gap: 1px; touch-action: none; cursor: crosshair; }
+  .row { display: grid; grid-template-columns: repeat(10, 22px); gap: 1px; }
+  .cell { width: 22px; height: 22px; background: var(--cell); }
+  /* ライン消去モード: 消す行を強調する */
+  body.line .grid { cursor: pointer; }
+  body.line .row:hover .cell { box-shadow: inset 0 0 0 2px var(--danger); opacity: .75; }
+
+  /* 下部のアクションバー */
+  #bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100vw - 24px);
+         display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 10px; padding: 8px 12px;
+         background: var(--bar); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: 12px;
+         box-shadow: 0 4px 18px #0003; }
+  .group { display: flex; align-items: center; gap: 4px; }
+  .group + .group { padding-left: 10px; border-left: 1px solid var(--line); }
+  #bar button { font: inherit; color: inherit; background: var(--card); border: 1px solid var(--line);
+                border-radius: 6px; padding: 5px 9px; cursor: pointer; white-space: nowrap; }
+  #bar button:hover:not(:disabled) { border-color: var(--accent); }
+  #bar button:disabled { opacity: .4; cursor: default; }
+  #bar button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  #bar button.danger[aria-pressed="true"] { border-color: var(--danger); color: var(--danger); }
+  .swatch { width: 28px; height: 28px; padding: 0 !important; border-radius: 6px !important; position: relative; }
+  .swatch[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .swatch.erase { background: var(--cell) !important; }
+  .swatch.erase::after { content: ""; position: absolute; inset: 5px; border-top: 2px solid var(--danger);
+                         transform: rotate(-45deg) translateY(8px); }
+  .mino { width: 28px; padding: 5px 0 !important; font-weight: 700 !important; color: #fff !important; border-color: transparent !important; }
+  .mino[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+  body.stamp .grid { cursor: copy; }
+  body.panning, body.panning * { cursor: grabbing !important; }
+  .marquee { position: absolute; border: 1px solid var(--accent); border-radius: 2px; pointer-events: none;
+             background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  #status { color: var(--sub); font-size: 12px; min-width: 9em; text-align: center; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<div id="viewport">
+  <div id="sizer"><div id="board"><div id="hint"></div></div></div>
+</div>
+
+<div id="bar" role="toolbar" aria-label="アクションバー">
+  <div class="group" id="colors" aria-label="色"></div>
+  <div class="group" id="minos" aria-label="ミノを貼り付け"></div>
+  <div class="group">
+    <button id="undo" title="元に戻す (Ctrl/⌘+Z)">↶ Undo</button>
+    <button id="redo" title="やり直す (Ctrl/⌘+Shift+Z)">↷ Redo</button>
+  </div>
+  <div class="group">
+    <button id="line" class="danger" aria-pressed="false" title="クリックした行を消して上を 1 段落とす (X)">ライン消去</button>
+    <button id="full" title="選択中の Box で、横一列そろった行をすべて消す">そろった行を消す</button>
+    <button id="clear" title="選択中の Box を空にする">全消し</button>
+  </div>
+  <div class="group">
+    <button id="add" title="Box を追加 (ボードの空いた場所をダブルクリックでも追加)">＋ Box</button>
+    <button id="dup" title="選択中の Box を複製 (Ctrl/⌘+D、コピー&ペーストは Ctrl/⌘+C → V)。複数選択は Shift+クリックか、空いた場所をドラッグ">複製</button>
+    <button id="del" title="選択中の Box を削除 (Delete)">削除</button>
+  </div>
+  <div class="group">
+    <button id="export" title="ボード全体を JSON ファイルに保存">保存</button>
+    <button id="import" title="JSON ファイルからボードを読み込む">読込</button>
+    <input type="file" id="file" accept="application/json,.json">
+  </div>
+  <div class="group">
+    <button id="zoom" title="表示倍率 (Ctrl/⌘+スクロールで拡大縮小、クリックで 100% に戻す)">100%</button>
+  </div>
+  <span id="status"></span>
+</div>
+
+<script>
+const SIZE = 10, CELL = 23, STORE_KEY = "tki-board-v1", MAX_HISTORY = 300;
+// 色: テトリミノ 7 色 + お邪魔 (灰) + 消しゴム ("")
+const COLORS = [
+  ["I", "#35b8d6"], ["O", "#e6b422"], ["T", "#9b4fd0"], ["S", "#4caf50"],
+  ["Z", "#e0483e"], ["J", "#3a66d0"], ["L", "#ef8a24"], ["X", "#8a93a0"], ["", ""],
+];
+const COLOR_OF = Object.fromEntries(COLORS);
+const $ = id => document.getElementById(id);
+const board = $("board"), viewport = $("viewport"), sizer = $("sizer");
+const BOARD_W = 6000, BOARD_H = 4000, ZOOM_MIN = 0.2, ZOOM_MAX = 2.5;
+
+// state.boxes: [{id, x, y, title, cells}]。cells は 100 文字 (上の段から。"_" は空)
+let state = {boxes: [], nextId: 1};
+// selected: 選択中の Box の id (複数選択できる)。clipboard: コピーした Box の一覧
+let selected = new Set(), color = "T", lineMode = false, clipboard = null, zoom = 1;
+// ミノ貼り付けモード: {piece, rot} (null なら色塗り)。hover はポインタのあるマス {id, i}
+let stamp = null, hover = null, ghost = [];
+
+// ミノの形 (回転状態 0)。[箱の大きさ, マス (x, y) の一覧]、y は下向き。ポインタのマスが箱の (1, 1) に来る
+const MINOS = {
+  I: [4, [[0, 1], [1, 1], [2, 1], [3, 1]]],
+  O: [2, [[1, 0], [2, 0], [1, 1], [2, 1]]],
+  T: [3, [[1, 0], [0, 1], [1, 1], [2, 1]]],
+  S: [3, [[1, 0], [2, 0], [0, 1], [1, 1]]],
+  Z: [3, [[0, 0], [1, 0], [1, 1], [2, 1]]],
+  J: [3, [[0, 0], [0, 1], [1, 1], [2, 1]]],
+  L: [3, [[2, 0], [0, 1], [1, 1], [2, 1]]],
+};
+// ポインタがマス i にあるときにミノが占めるマス。{cells: 盤内のマス番号, ok: 置けるか}
+function stampCells(b, i) {
+  const [size, shape] = MINOS[stamp.piece];
+  let pts = shape;
+  // O は回転しても同じ形。それ以外は時計回りに rot 回まわす
+  if (stamp.piece !== "O") for (let k = 0; k < stamp.rot; k++) pts = pts.map(([x, y]) => [size - 1 - y, x]);
+  const cx = i % SIZE, cy = Math.floor(i / SIZE), cells = [];
+  let ok = true;
+  for (const [x, y] of pts) {
+    const px = cx + x - 1, py = cy + y - 1;
+    if (px < 0 || px >= SIZE || py < 0 || py >= SIZE) { ok = false; continue; }
+    cells.push(py * SIZE + px);
+    if (b.cells[py * SIZE + px] !== "_") ok = false;
+  }
+  return {cells, ok};
+}
+function clearGhost() {
+  for (const [el, b, i] of ghost) { paintCell(el, b.cells[i]); el.style.opacity = ""; el.style.boxShadow = ""; }
+  ghost = [];
+}
+// 貼り付け位置のプレビュー。置けない場合は赤枠にする
+function showGhost() {
+  clearGhost();
+  const b = stamp && hover && boxById(hover.id);
+  if (!b) return;
+  const els = board.querySelector(`.box[data-id="${b.id}"]`).querySelectorAll(".cell");
+  const {cells, ok} = stampCells(b, hover.i);
+  for (const i of cells) {
+    const el = els[i];
+    if (b.cells[i] === "_") { el.style.background = COLOR_OF[stamp.piece]; el.style.opacity = ok ? ".6" : ".35"; }
+    if (!ok) el.style.boxShadow = "inset 0 0 0 2px var(--danger)";
+    ghost.push([el, b, i]);
+  }
+}
+function setStamp(piece) {
+  // 同じミノのキーをもう一度押したら回転する
+  stamp = stamp && stamp.piece === piece ? {piece, rot: (stamp.rot + 1) % 4} : {piece, rot: 0};
+  lineMode = false;
+  showGhost();
+  updateBar();
+}
+function rotateStamp(dir) {
+  if (!stamp) return;
+  stamp.rot = (stamp.rot + dir + 4) % 4;
+  showGhost();
+}
+function setPaint(ch) {
+  color = ch;
+  stamp = null;
+  lineMode = false;
+  clearGhost();
+  updateBar();
+}
+let history = [], cursor = -1, pointer = null;
+
+const emptyCells = () => "_".repeat(SIZE * SIZE);
+const boxById = id => state.boxes.find(b => b.id === id);
+const selBoxes = () => state.boxes.filter(b => selected.has(b.id));
+
+// ---- 履歴と保存 ----
+function commit() {
+  const snapshot = JSON.stringify(state);
+  if (snapshot === history[cursor]) return;
+  history = history.slice(0, cursor + 1);
+  history.push(snapshot);
+  if (history.length > MAX_HISTORY) history.shift();
+  cursor = history.length - 1;
+  save();
+  updateBar();
+}
+function restore(i) {
+  cursor = i;
+  state = JSON.parse(history[cursor]);
+  selected = new Set(selBoxes().map(b => b.id));
+  save();
+  render();
+}
+function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch {}
+}
+function load() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STORE_KEY));
+    if (valid(data)) state = data;
+  } catch {}
+}
+function valid(data) {
+  return data && Array.isArray(data.boxes) && data.boxes.every(b =>
+    typeof b.cells === "string" && b.cells.length === SIZE * SIZE && Number.isFinite(b.x) && Number.isFinite(b.y));
+}
+
+// ---- 描画 ----
+function paintCell(el, ch) {
+  el.style.background = ch === "_" ? "" : COLOR_OF[ch] || "";
+}
+function boxElement(b) {
+  const el = document.createElement("div");
+  el.className = "box" + (selected.has(b.id) ? " sel" : "");
+  el.dataset.id = b.id;
+  el.style.left = b.x + "px";
+  el.style.top = b.y + "px";
+  const head = document.createElement("header");
+  head.innerHTML = `<span class="grip" aria-hidden="true">⠿</span>`;
+  const title = document.createElement("input");
+  title.value = b.title || "";
+  title.placeholder = "メモ";
+  title.setAttribute("aria-label", "Box のメモ");
+  head.append(title);
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  for (let y = 0; y < SIZE; y++) {
+    const row = document.createElement("div");
+    row.className = "row";
+    for (let x = 0; x < SIZE; x++) {
+      const c = document.createElement("div");
+      c.className = "cell";
+      c.dataset.i = y * SIZE + x;
+      paintCell(c, b.cells[y * SIZE + x]);
+      row.append(c);
+    }
+    grid.append(row);
+  }
+  el.append(head, grid);
+  return el;
+}
+function render() {
+  ghost = [];
+  hover = null;
+  for (const el of [...board.querySelectorAll(".box")]) el.remove();
+  for (const b of state.boxes) board.append(boxElement(b));
+  $("hint").textContent = state.boxes.length ? "" :
+    "下の「＋ Box」か、ボードのダブルクリックで 10x10 の Box を置けます";
+  updateBar();
+}
+function updateBar() {
+  const count = selBoxes().length, has = count > 0;
+  $("undo").disabled = cursor <= 0;
+  $("redo").disabled = cursor >= history.length - 1;
+  for (const id of ["full", "clear", "dup", "del"]) $(id).disabled = !has;
+  $("line").setAttribute("aria-pressed", lineMode);
+  document.body.classList.toggle("line", lineMode);
+  document.body.classList.toggle("stamp", !!stamp);
+  for (const b of $("colors").children) b.setAttribute("aria-pressed", !lineMode && !stamp && b.dataset.c === color);
+  for (const b of $("minos").children) b.setAttribute("aria-pressed", !!stamp && b.dataset.p === stamp.piece);
+  $("status").textContent = lineMode ? "消す行をクリック"
+    : stamp ? `${stamp.piece} ミノを貼り付け (R / 右クリックで回転)`
+    : count > 1 ? `${count} 個を選択中` : `Box ${state.boxes.length} 個`;
+  $("zoom").textContent = Math.round(zoom * 100) + "%";
+}
+function setSelection(ids) {
+  selected = new Set(ids);
+  for (const el of board.querySelectorAll(".box")) el.classList.toggle("sel", selected.has(Number(el.dataset.id)));
+  updateBar();
+}
+
+// ---- 視点 (拡大縮小とスクロール) ----
+// 画面上の座標をボード上の座標 (拡大縮小前) に直す
+function toBoard(cx, cy) {
+  const r = board.getBoundingClientRect();
+  return [(cx - r.left) / zoom, (cy - r.top) / zoom];
+}
+// (cx, cy) の位置にあるボード上の点を動かさずに倍率を変える
+function setZoom(z, cx, cy) {
+  z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  const v = viewport.getBoundingClientRect();
+  cx ??= v.left + viewport.clientWidth / 2;
+  cy ??= v.top + viewport.clientHeight / 2;
+  const [bx, by] = toBoard(cx, cy);
+  zoom = z;
+  board.style.transform = `scale(${zoom})`;
+  sizer.style.width = BOARD_W * zoom + "px";
+  sizer.style.height = BOARD_H * zoom + "px";
+  viewport.scrollLeft = bx * zoom - (cx - v.left);
+  viewport.scrollTop = by * zoom - (cy - v.top);
+  updateBar();
+}
+
+// ---- Box の操作 ----
+const snap = v => Math.max(0, Math.round(v / 12) * 12);
+// items: [{x, y, source}]。source があればその内容を写す。追加した Box を選択状態にする
+function addBoxes(items) {
+  const added = [];
+  for (const {x, y, source} of items) {
+    const b = {id: state.nextId++, x: snap(x), y: snap(y),
+               title: source ? source.title : "", cells: source ? source.cells : emptyCells()};
+    // まったく同じ位置に重ならないよう少しずらす
+    while (state.boxes.some(o => o.x === b.x && o.y === b.y)) { b.x += 24; b.y += 24; }
+    state.boxes.push(b);
+    added.push(b.id);
+  }
+  selected = new Set(added);
+  commit();
+  render();
+}
+const addBox = (x, y, source) => addBoxes([{x, y, source}]);
+function viewCenter() {
+  return [(viewport.scrollLeft + viewport.clientWidth / 2) / zoom - 130,
+          (viewport.scrollTop + viewport.clientHeight / 2) / zoom - 190];
+}
+// sources をまとめて (dx, dy) だけずらした位置に写す。相対位置は保つ
+function copyBoxes(sources, dx, dy) {
+  addBoxes(sources.map(b => ({x: b.x + dx, y: b.y + dy, source: b})));
+}
+function duplicate() {
+  const bs = selBoxes();
+  if (!bs.length) return;
+  // 選択範囲のすぐ右隣に置く
+  const xs = bs.map(b => b.x);
+  copyBoxes(bs, Math.max(...xs) - Math.min(...xs) + 276, 0);
+}
+function removeSelected() {
+  if (!selBoxes().length) return;
+  state.boxes = state.boxes.filter(b => !selected.has(b.id));
+  selected = new Set();
+  commit();
+  render();
+}
+// row 行目 (0 が最上段) を消し、それより上を 1 段ずつ落とす
+function deleteRow(b, row) {
+  b.cells = "_".repeat(SIZE) + b.cells.slice(0, row * SIZE) + b.cells.slice((row + 1) * SIZE);
+}
+function deleteFullRows() {
+  for (const b of selBoxes())
+    for (let y = 0; y < SIZE; y++)
+      if (!b.cells.slice(y * SIZE, (y + 1) * SIZE).includes("_")) deleteRow(b, y);
+  commit();
+  render();
+}
+function clearSelected() {
+  for (const b of selBoxes()) b.cells = emptyCells();
+  commit();
+  render();
+}
+
+// ---- ポインタ操作 (塗る / 動かす / ライン消去 / 範囲選択 / 視点移動) ----
+// drag: {type: "paint", box, ch} / {type: "move", p0, items} / {type: "marquee", x, y, base, el}
+//       / {type: "pan", x, y, left, top}
+let drag = null;
+function setCell(b, i, ch, el) {
+  if (b.cells[i] === ch) return;
+  b.cells = b.cells.slice(0, i) + ch + b.cells.slice(i + 1);
+  paintCell(el, ch);
+}
+// 中ボタンのドラッグで視点を動かす
+viewport.addEventListener("mousedown", e => { if (e.button === 1) e.preventDefault(); });
+viewport.addEventListener("pointerdown", e => {
+  if (e.button !== 1) return;
+  e.preventDefault();
+  drag = {type: "pan", x: e.clientX, y: e.clientY, left: viewport.scrollLeft, top: viewport.scrollTop};
+  document.body.classList.add("panning");
+});
+board.addEventListener("pointerdown", e => {
+  if (e.button === 1) return;
+  const boxEl = e.target.closest(".box");
+  const additive = e.shiftKey || e.metaKey;
+  if (!boxEl) {
+    // 空いた場所のドラッグで範囲選択 (Shift / ⌘ を押していれば今の選択に追加)
+    if (e.button !== 0) return;
+    if (!additive) setSelection([]);
+    const [x, y] = toBoard(e.clientX, e.clientY);
+    const el = document.createElement("div");
+    el.className = "marquee";
+    board.append(el);
+    drag = {type: "marquee", x, y, base: new Set(selected), el};
+    return;
+  }
+  const b = boxById(Number(boxEl.dataset.id));
+  if (additive) {
+    // Shift / ⌘ + クリックで選択に追加・解除
+    e.preventDefault();
+    const ids = new Set(selected);
+    ids.has(b.id) ? ids.delete(b.id) : ids.add(b.id);
+    setSelection(ids);
+    return;
+  }
+  // 複数選択中の Box を触ったときは選択を保つ (まとめて動かせるように)
+  if (!selected.has(b.id)) setSelection([b.id]);
+  const cell = e.target.closest(".cell");
+  if (cell) {
+    e.preventDefault();
+    const i = Number(cell.dataset.i);
+    if (lineMode) {
+      deleteRow(b, Math.floor(i / SIZE));
+      commit();
+      render();
+      return;
+    }
+    if (stamp) {
+      // 右クリックは回転、左クリックで貼り付け
+      if (e.button === 2) { rotateStamp(1); return; }
+      const {cells, ok} = stampCells(b, i);
+      if (!ok) return;
+      for (const k of cells) b.cells = b.cells.slice(0, k) + stamp.piece + b.cells.slice(k + 1);
+      commit();
+      render();
+      return;
+    }
+    // 右クリックは消しゴム
+    const ch = e.button === 2 || color === "" ? "_" : color;
+    drag = {type: "paint", box: b, ch};
+    setCell(b, i, ch, cell);
+  } else if (e.target.closest("header") && e.target.tagName !== "INPUT") {
+    // 選択中の Box をまとめて動かす
+    e.preventDefault();
+    const items = selBoxes().map(o => ({box: o, el: board.querySelector(`.box[data-id="${o.id}"]`), x: o.x, y: o.y}));
+    for (const it of items) it.el.style.zIndex = 10;
+    drag = {type: "move", p0: toBoard(e.clientX, e.clientY), items};
+  }
+});
+window.addEventListener("pointermove", e => {
+  pointer = [e.clientX, e.clientY];
+  if (stamp && !drag) {
+    const cell = e.target.closest?.(".cell");
+    const next = cell ? {id: Number(cell.closest(".box").dataset.id), i: Number(cell.dataset.i)} : null;
+    if (next?.id !== hover?.id || next?.i !== hover?.i) { hover = next; showGhost(); }
+  }
+  if (!drag) return;
+  if (drag.type === "paint") {
+    const cell = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".cell");
+    if (cell && Number(cell.closest(".box").dataset.id) === drag.box.id)
+      setCell(drag.box, Number(cell.dataset.i), drag.ch, cell);
+  } else if (drag.type === "pan") {
+    viewport.scrollLeft = drag.left - (e.clientX - drag.x);
+    viewport.scrollTop = drag.top - (e.clientY - drag.y);
+  } else if (drag.type === "marquee") {
+    const [x, y] = toBoard(e.clientX, e.clientY);
+    const left = Math.min(x, drag.x), top = Math.min(y, drag.y), w = Math.abs(x - drag.x), h = Math.abs(y - drag.y);
+    Object.assign(drag.el.style, {left: left + "px", top: top + "px", width: w + "px", height: h + "px"});
+    // 範囲に少しでもかかった Box を選択する
+    const ids = new Set(drag.base);
+    for (const el of board.querySelectorAll(".box"))
+      if (el.offsetLeft < left + w && el.offsetLeft + el.offsetWidth > left &&
+          el.offsetTop < top + h && el.offsetTop + el.offsetHeight > top) ids.add(Number(el.dataset.id));
+    setSelection(ids);
+  } else {
+    const [x, y] = toBoard(e.clientX, e.clientY);
+    for (const it of drag.items) {
+      it.box.x = Math.max(0, it.x + x - drag.p0[0]);
+      it.box.y = Math.max(0, it.y + y - drag.p0[1]);
+      it.el.style.left = it.box.x + "px";
+      it.el.style.top = it.box.y + "px";
+    }
+  }
+});
+window.addEventListener("pointerup", () => {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  if (d.type === "move") {
+    for (const it of d.items) { it.box.x = snap(it.box.x); it.box.y = snap(it.box.y); }
+    // 動かした Box を最前面にする
+    const moved = new Set(d.items.map(it => it.box));
+    state.boxes = state.boxes.filter(b => !moved.has(b)).concat(state.boxes.filter(b => moved.has(b)));
+    commit();
+    render();
+  } else if (d.type === "paint") {
+    commit();
+  } else if (d.type === "marquee") {
+    d.el.remove();
+  } else {
+    document.body.classList.remove("panning");
+  }
+});
+// Ctrl / ⌘ + スクロール (トラックパッドのピンチも同じ) で拡大縮小
+viewport.addEventListener("wheel", e => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  setZoom(zoom * Math.exp(-e.deltaY * 0.002), e.clientX, e.clientY);
+}, {passive: false});
+board.addEventListener("contextmenu", e => { if (e.target.closest(".grid")) e.preventDefault(); });
+board.addEventListener("dblclick", e => {
+  if (e.target !== board) return;
+  const [x, y] = toBoard(e.clientX, e.clientY);
+  addBox(x - 130, y - 20);
+});
+board.addEventListener("change", e => {
+  if (e.target.tagName !== "INPUT") return;
+  boxById(Number(e.target.closest(".box").dataset.id)).title = e.target.value;
+  commit();
+});
+
+// ---- アクションバー ----
+for (const [ch, hex] of COLORS) {
+  const b = document.createElement("button");
+  b.className = "swatch" + (ch === "" ? " erase" : "");
+  b.dataset.c = ch;
+  b.style.background = hex;
+  b.title = ch === "" ? "消しゴム (右クリックでも消せます)" : ch === "X" ? "灰 (お邪魔)" : `${ch} ミノの色で塗る (Shift+${ch})`;
+  b.setAttribute("aria-label", b.title);
+  b.addEventListener("click", () => setPaint(ch));
+  $("colors").append(b);
+}
+for (const piece of Object.keys(MINOS)) {
+  const b = document.createElement("button");
+  b.className = "mino";
+  b.dataset.p = piece;
+  b.textContent = piece;
+  b.style.background = COLOR_OF[piece];
+  b.title = `${piece} ミノを貼り付け (${piece} キー。もう一度押すか R で回転)`;
+  b.setAttribute("aria-label", b.title);
+  b.addEventListener("click", () => setStamp(piece));
+  $("minos").append(b);
+}
+$("undo").addEventListener("click", () => cursor > 0 && restore(cursor - 1));
+$("redo").addEventListener("click", () => cursor < history.length - 1 && restore(cursor + 1));
+$("line").addEventListener("click", () => { lineMode = !lineMode; stamp = null; clearGhost(); updateBar(); });
+$("full").addEventListener("click", deleteFullRows);
+$("clear").addEventListener("click", clearSelected);
+$("add").addEventListener("click", () => addBox(...viewCenter()));
+$("dup").addEventListener("click", duplicate);
+$("del").addEventListener("click", removeSelected);
+$("zoom").addEventListener("click", () => setZoom(1));
+$("export").addEventListener("click", () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 1)], {type: "application/json"}));
+  a.download = "board.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+$("import").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!valid(data)) throw new Error("形式が違います");
+    state = {boxes: data.boxes, nextId: Math.max(0, ...data.boxes.map(b => b.id || 0)) + 1};
+    selected = new Set();
+    commit();
+    render();
+  } catch (err) {
+    $("status").textContent = "読み込めませんでした";
+  }
+});
+
+// ---- キーボード ----
+window.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") {
+    if (e.key === "Enter" || e.key === "Escape") e.target.blur();
+    return;
+  }
+  const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
+  if (mod && key === "z") { e.preventDefault(); $(e.shiftKey ? "redo" : "undo").click(); }
+  else if (mod && key === "y") { e.preventDefault(); $("redo").click(); }
+  else if (mod && key === "c") {
+    const bs = selBoxes();
+    if (bs.length) clipboard = bs.map(b => ({title: b.title, cells: b.cells, x: b.x, y: b.y}));
+  }
+  else if (mod && key === "v") {
+    if (!clipboard) return;
+    e.preventDefault();
+    // ポインタがボード上にあればその位置へ、なければコピー元の右隣へ貼る (複数なら相対位置を保つ)
+    const xs = clipboard.map(b => b.x), ys = clipboard.map(b => b.y);
+    const minX = Math.min(...xs), minY = Math.min(...ys);
+    if (pointer && document.elementFromPoint(...pointer) === board) {
+      const [x, y] = toBoard(...pointer);
+      copyBoxes(clipboard, x - 130 - minX, y - 20 - minY);
+    } else {
+      copyBoxes(clipboard, Math.max(...xs) - minX + 276, 0);
+    }
+  }
+  else if (mod && key === "a") { e.preventDefault(); setSelection(state.boxes.map(b => b.id)); }
+  else if (mod && key === "d") { e.preventDefault(); duplicate(); }
+  else if (mod) return;
+  else if (key === "delete" || key === "backspace") removeSelected();
+  // ミノのキー: そのまま押すと貼り付け、Shift を押しながらだとその色で塗る
+  else if (key.length === 1 && "ioszjlt".includes(key)) e.shiftKey ? setPaint(key.toUpperCase()) : setStamp(key.toUpperCase());
+  else if (key === "r") rotateStamp(e.shiftKey ? -1 : 1);
+  else if (key === "x") $("line").click();
+  else if (key === "escape") { lineMode = false; stamp = null; clearGhost(); updateBar(); }
+});
+
+load();
+commit();
+render();
+setZoom(1);
+</script>
+</body>
+</html>

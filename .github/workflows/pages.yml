@@ -1,0 +1,81 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect HTML from numbered directories
+        run: |
+          python3 - <<'EOF'
+          import html, re, shutil
+          from pathlib import Path
+
+          site = Path("_site")
+          site.mkdir()
+          items = []
+          for d in sorted(p for p in Path(".").iterdir() if p.is_dir() and re.fullmatch(r"\d+", p.name)):
+              for f in sorted(d.glob("*.html")):
+                  (site / d.name).mkdir(exist_ok=True)
+                  shutil.copy2(f, site / d.name / f.name)
+                  m = re.search(r"<title>(.*?)</title>", f.read_text(encoding="utf-8"), re.S)
+                  title = m.group(1).strip() if m else f.name
+                  items.append((f"{d.name}/{f.name}", d.name, title))
+
+          rows = "\n".join(
+              f'<li><span class="num">{n}</span><a href="{html.escape(href)}">{t}</a></li>'
+              for href, n, t in items
+          )
+          (site / "index.html").write_text(f"""<!doctype html>
+          <html lang="ja">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>tki-search</title>
+          <style>
+            body {{ font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 16px; line-height: 1.6; }}
+            ul {{ list-style: none; padding: 0; }}
+            li {{ padding: .4rem 0; border-bottom: 1px solid #ddd; }}
+            .num {{ display: inline-block; width: 3em; color: #888; font-family: monospace; }}
+          </style>
+          </head>
+          <body>
+          <h1>tki-search</h1>
+          <p>開幕 TSD の調査結果</p>
+          <ul>
+          {rows}
+          </ul>
+          </body>
+          </html>
+          """, encoding="utf-8")
+          print(*(i[0] for i in items), sep="\n")
+          EOF
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
