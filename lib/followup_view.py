@@ -1,6 +1,6 @@
 """lib/followup.py の列挙結果を、単一ファイルの HTML として可視化する。05, 06 で共有する。
 
-グループ (タブ) ごとにシルエットを並べ、各シルエットをどのミノ順で組めるかを 720 マスの
+グループ (タブ) ごとにシルエットを並べ、各シルエットをどのミノ順で組めるかを 720 マス (始動ミノを固定したタブでは 120 マス) の
 「ミノ順マップ」で表示する。2 つのシルエットの組の網羅数はブラウザ側で現在の条件に合わせて計算する。
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lib.followup import ORDER_INDEX
+from lib.followup import NAMES, ORDER_INDEX
 
 HTML_TEMPLATE = r"""<!doctype html>
 <html lang="ja">
@@ -69,6 +69,8 @@ HTML_TEMPLATE = r"""<!doctype html>
          font-size: 12px; color: var(--sub); }
   .card .tiling button { font: inherit; color: inherit; background: var(--chip); border: 1px solid var(--line);
          border-radius: 4px; padding: 0 8px; cursor: pointer; }
+  .card .tiling button.icon { display: inline-flex; align-items: center; padding: 2px 5px; }
+  .card .tiling button.icon svg { width: 14px; height: 14px; margin: 0; pointer-events: none; }
   canvas.map { display: block; margin: 10px auto 0; cursor: crosshair; }
   .maps canvas.map { margin: 0; }
   .maps { display: flex; flex-wrap: wrap; gap: 8px 20px; }
@@ -76,6 +78,8 @@ HTML_TEMPLATE = r"""<!doctype html>
   .grid.wide { grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); }
   .sides { display: flex; gap: 12px; }
   .side { flex: 1; min-width: 0; }
+  .board { cursor: pointer; position: relative; }
+  .board small { position: absolute; top: 0; left: 0; font-size: 11px; color: var(--sub); }
   #pairs { margin-bottom: 16px; }
   #pairs p { margin: 0 0 8px; font-size: 13px; }
   #pairs p b { font-size: 16px; font-variant-numeric: tabular-nums; }
@@ -88,7 +92,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   .pair small { color: var(--sub); }
   .stat svg { display: block; width: 100px; height: auto; margin-bottom: 4px; }
   #pinned { margin-bottom: 20px; padding: 12px; border: 1px dashed var(--accent); border-radius: 10px; }
-  #pinned[hidden] { display: none; }
+  #pinned[hidden], .tabs[hidden], .controls[hidden] { display: none; }
   #pinned header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
   #pinned h3 { margin: 0; font-size: 14px; color: var(--accent); }
   #pinned header button { font: inherit; color: inherit; background: var(--card); border: 1px solid var(--line);
@@ -120,7 +124,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   <div id="pairs-list"></div>
 </section>
 <section id="pinned" hidden>
-  <header><h3 id="pinned-title"></h3><button id="unpin-all">すべて外す</button></header>
+  <header><h3 id="pinned-title"></h3><button id="copy-pinned" title="チェックした盤面をまとめて 04/board.html に貼れる形でコピー">まとめてコピー</button><button id="unpin-all">すべて外す</button></header>
   <div class="grid" id="pinned-grid"></div>
   <div id="coverage"><p id="coverage-text"></p><div class="maps" id="pinned-map"></div></div>
 </section>
@@ -132,25 +136,26 @@ HTML_TEMPLATE = r"""<!doctype html>
     <option value="1">ソフトドロップ: 1 回まで</option>
     <option value="2">ソフトドロップ: 2 回まで</option>
   </select>
-  <select id="rows" aria-label="TSD を打つ段"></select>
+  <select id="rows" aria-label="__SPIN__ を打つ段"></select>
   <select id="sort" aria-label="並び順">
     <option value="orders">組めるミノ順が多い順</option>
     <option value="height">低い順</option>
   </select>
 </div>
-<div class="controls">
+<div class="controls" id="order-controls">
   <span class="label">ミノ順</span>
   <span id="slots"></span>
   <button id="reset">リセット</button>
   <span id="count"></span>
 </div>
-<p class="legend">盤面: 両脇の黄色い印は TSD で消える段、紫は T ミノ、薄い色は開始形状 (前の巡までの残り)。
-ミノ順マップ: 1 マスが 1 つのミノ順 (全 720 通り)。左の文字が 1 番目のミノで、その中の 5 行が 2 番目のミノ、
+<p class="legend">盤面: 両脇の黄色い印は __SPIN__ で消える段、紫は T ミノ<span id="legend-start">、薄い色は開始形状 (前の巡までの残り)</span>。
+ミノ順マップ: 1 マスが 1 つのミノ順。左の文字が 1 番目のミノで、その中の 5 行が 2 番目のミノ、
 24 列が残り 4 ミノの順番です。
 <i style="background:var(--ok)"></i>ソフトドロップなしで組める
 <i style="background:var(--soft)"></i>ソフトドロップが必要
 <i style="background:var(--cell)"></i>組めない (最後の T は回数に含めません)。
-マスにカーソルを置くとミノ順を表示し、クリックするとそのミノ順で絞り込みます。</p>
+マスにカーソルを置くとミノ順を表示<span id="legend-click">し、クリックするとそのミノ順で絞り込み</span>ます。
+盤面をクリックすると、ライン消去後の地形に切り替わります (もう一度クリックで戻ります)。</p>
 <div class="grid" id="grid"></div>
 <button class="more" id="more" hidden></button>
 </main>
@@ -170,26 +175,32 @@ const ORDERS = [];
 })("", NAMES);
 
 // グループ: {l: [開始形状の名前, ...], f: [開始形状, ...], p: [パターン, ...]}。開始形状ごとのグループは
-// l が 1 つ、A・B 共通のグループは 2 つ。パターン: {id, r: TSD の段, n: 補足 (省略可), s: [開始形状ごとのミノ割り一覧]}、
+// l が 1 つ、A・B 共通のグループは 2 つ。パターン: {id, r: T スピンで消す段, n: 補足 (省略可), s: [開始形状ごとのミノ割り一覧]}、
 // ミノ割りは [盤面, ミノ順の列]。ミノ順の列は 3 文字ずつで、36 進 2 桁のミノ順番号 + ソフトドロップ回数。
-// st[k * 720 + i] = k 番目の開始形状でミノ順 i が 0 (組めない) / ソフトドロップ回数 + 1
-function decode(s) {
-  const st = new Uint8Array(720);
+// グループに first (始動ミノ) があれば、そのミノで始まる 120 通りだけを扱い、ミノ順番号もその中での番号になる。
+// st[k * N + i] = k 番目の開始形状でミノ順 i が 0 (組めない) / ソフトドロップ回数 + 1 (N はグループのミノ順の数)
+function decode(s, n) {
+  const st = new Uint8Array(n);
   for (let i = 0; i < s.length; i += 3) st[parseInt(s.slice(i, i + 2), 36)] = Number(s[i + 2]) + 1;
   return st;
 }
 const merge = (dst, src, off = 0) => {
   for (let i = 0; i < src.length; i++) if (src[i] && (!dst[off + i] || src[i] < dst[off + i])) dst[off + i] = src[i];
 };
+const isEmpty = field => !/[^_\/]/.test(field);
 const byId = new Map();
 for (const gid of Object.keys(DATA)) {
-  for (const p of DATA[gid].p) {
+  const g = DATA[gid];
+  g.ord = g.first ? ORDERS.filter(o => o[0] === g.first) : ORDERS;
+  const n = g.ord.length;
+  for (const p of g.p) {
     p.gid = gid;
-    p.sides = p.s.map(ts => ({ts: ts.map(([f, o]) => ({f, st: decode(o)})), shown: 0}));
-    p.st = new Uint8Array(720 * p.sides.length);  // ミノ割りをまたいだ最良 (ソフトドロップ最少)
-    p.sides.forEach((side, k) => side.ts.forEach(t => merge(p.st, t.st, k * 720)));
+    p.key = g.first ? g.first + ":" + p.id : p.id;  // 同じシルエットが複数のタブに出るので、タブごとに区別する
+    p.sides = p.s.map(ts => ({ts: ts.map(([f, o]) => ({f, st: decode(o, n)})), shown: 0}));
+    p.st = new Uint8Array(n * p.sides.length);  // ミノ割りをまたいだ最良 (ソフトドロップ最少)
+    p.sides.forEach((side, k) => side.ts.forEach(t => merge(p.st, t.st, k * n)));
     p.h = p.sides[0].ts[0].f.split("/").length;
-    byId.set(p.id, p);
+    byId.set(p.key, p);
   }
 }
 
@@ -200,7 +211,7 @@ function boardSvg(field, minRows) {
   let s = `<svg viewBox="-6 0 ${10 * C + 12} ${h * C}" role="img" aria-label="盤面">`;
   for (let y = 0; y < h; y++) {
     const line = lines[lines.length - 1 - y];
-    // TSD で消える段 (すべて埋まっている段) の両脇に印を付ける
+    // T スピンで消える段 (すべて埋まっている段) の両脇に印を付ける
     if (line && !line.includes("_")) for (const x of [-6, 10 * C + 2])
       s += `<rect x="${x}" y="${(h - 1 - y) * C + .5}" width="4" height="${C - 1}" rx="1.5" fill="var(--clear)"/>`;
     for (let x = 0; x < 10; x++) {
@@ -212,23 +223,62 @@ function boardSvg(field, minRows) {
   return s + "</svg>";
 }
 
-// ミノ順マップ: 1 番目のミノごとのブロック (6 個) x 2 番目のミノ (5 行) x 残り (24 列)
-const CW = 8, CH = 5, GAP = 4, GUT = 14, MAP_W = GUT + 24 * CW, MAP_H = 6 * 5 * CH + 5 * GAP;
-function drawMap(canvas, st, maxSoft, off = 0) {
+// ライン消去後の地形: そろった段を取り除いて上の段を下ろす
+const afterClear = field => field.split("/").filter(line => line.includes("_")).join("/");
+
+// 04/board.html に貼れる形 (1 行 = 「タイトル<Tab>盤面」) にする。表示中のミノ割りと、消去前 / 後の状態をそのまま写す。
+// 開始形状のマス (小文字) も通常のミノの色にする
+function boxText(p, k) {
+  const g = DATA[p.gid], side = p.sides[k], t = side.ts[side.shown];
+  const field = (p.after ? afterClear(t.f) : t.f).toUpperCase();
+  const title = [p.id, g.l[k], `${p.r} 段目`].concat(p.after ? ["消去後"] : []).join(" ");
+  return `${title}\t${field}`;
+}
+// コピーボタンのアイコン (重なった 2 枚の紙) と、コピーした直後に出すチェック
+const ICON = d => `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" ` +
+  `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const COPY_ICON = ICON(`<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/>`);
+const CHECK_ICON = ICON(`<path d="M3 8.5l3 3 7-7"/>`);
+function copyText(text, button) {
+  const done = () => {
+    // アイコンだけのボタンはチェックに、文字のボタンは「コピーしました」に一時的に変える
+    const icon = button.classList.contains("icon"), before = button.innerHTML;
+    if (button.dataset.busy) return;
+    button.dataset.busy = "1";
+    if (icon) button.innerHTML = CHECK_ICON; else button.textContent = "コピーしました";
+    setTimeout(() => { button.innerHTML = before; delete button.dataset.busy; }, 1200);
+  };
+  const fallback = () => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.append(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+    done();
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
+  else fallback();
+}
+
+// ミノ順マップ: 1 番目のミノごとのブロック (6 個。始動ミノを固定したタブでは 1 個) x 2 番目のミノ (5 行) x 残り (24 列)
+const CW = 8, GAP = 4, GUT = 14, MAP_W = GUT + 24 * CW;
+function drawMap(canvas, st, maxSoft, off, ord) {
   const dpr = window.devicePixelRatio || 1, css = getComputedStyle(document.documentElement);
   const v = name => css.getPropertyValue(name).trim();
+  const nb = ord.length / 120, CH = nb === 1 ? 10 : 5, MAP_H = nb * 5 * CH + (nb - 1) * GAP;
   canvas.width = MAP_W * dpr; canvas.height = MAP_H * dpr;
   canvas.style.width = MAP_W + "px"; canvas.style.height = MAP_H + "px";
-  canvas.st = st; canvas.maxSoft = maxSoft; canvas.off = off;
+  Object.assign(canvas, {st, maxSoft, off, ord, nb, ch: CH});
   const g = canvas.getContext("2d");
   g.scale(dpr, dpr);
   g.font = "600 11px ui-monospace, Menlo, monospace";
   g.textBaseline = "middle";
   const cell = v("--cell"), ok = v("--ok"), soft = v("--soft");
-  for (let b = 0; b < 6; b++) {
+  for (let b = 0; b < nb; b++) {
     const y0 = b * (5 * CH + GAP);
     g.fillStyle = v("--sub");
-    g.fillText(NAMES[b], 0, y0 + 5 * CH / 2);
+    g.fillText(ord[b * 120][0], 0, y0 + 5 * CH / 2);
     for (let r = 0; r < 5; r++) for (let c = 0; c < 24; c++) {
       const s = st[off + b * 120 + r * 24 + c];
       g.fillStyle = !s || s - 1 > maxSoft ? cell : s === 1 ? ok : soft;
@@ -238,20 +288,20 @@ function drawMap(canvas, st, maxSoft, off = 0) {
 }
 function mapIndex(canvas, e) {
   const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left - GUT, y = e.clientY - rect.top;
+  const x = e.clientX - rect.left - GUT, y = e.clientY - rect.top, CH = canvas.ch;
   const b = Math.floor(y / (5 * CH + GAP)), r = Math.floor((y - b * (5 * CH + GAP)) / CH), c = Math.floor(x / CW);
-  return x < 0 || c > 23 || b < 0 || b > 5 || r > 4 ? -1 : b * 120 + r * 24 + c;
+  return x < 0 || c > 23 || b < 0 || b >= canvas.nb || r > 4 ? -1 : b * 120 + r * 24 + c;
 }
 // 開始形状ごとのマップを横に並べる (A・B 共通のグループでは 2 枚)
 function mapsInto(el, st, maxSoft) {
-  const labels = DATA[start].l;
+  const labels = DATA[start].l, ord = DATA[start].ord;
   el.replaceChildren(...labels.map((label, k) => {
     const box = document.createElement("div");
     if (labels.length > 1) box.innerHTML = `<h4>${label}</h4>`;
     const canvas = document.createElement("canvas");
     canvas.className = "map";
     box.append(canvas);
-    drawMap(canvas, st, maxSoft, k * 720);
+    drawMap(canvas, st, maxSoft, k * ord.length, ord);
     return box;
   }));
 }
@@ -266,53 +316,82 @@ function savePinned() {
 // match を渡すと、ミノ順の絞り込みに合うものだけを数える
 const count = (st, maxSoft, match, from = 0, to = st.length) => {
   let n = 0;
-  for (let i = from; i < to; i++) if (st[i] && st[i] - 1 <= maxSoft && (!match || match[i % 720])) n++;
+  for (let i = from; i < to; i++) if (st[i] && st[i] - 1 <= maxSoft && (!match || match[i % match.length])) n++;
   return n;
 };
 
 function card(p, maxSoft) {
   const el = document.createElement("div");
-  const on = pinned.has(p.id), labels = DATA[p.gid].l, multi = labels.length > 1;
+  const on = pinned.has(p.key), labels = DATA[p.gid].l, multi = labels.length > 1, ord = DATA[p.gid].ord, n = ord.length;
   el.className = "card" + (on ? " pin" : "");
-  const per = labels.map((_, k) => count(p.st, maxSoft, null, k * 720, k * 720 + 720));
-  const title = multi ? labels.map((l, k) => `${l.slice(-1)} ${per[k]}`).join(" + ") + " 通りのミノ順" : `${per[0]} 通りのミノ順`;
-  el.innerHTML = `<h2><label><input type="checkbox" data-pin="${p.id}"${on ? " checked" : ""}>` +
+  const per = labels.map((_, k) => count(p.st, maxSoft, null, k * n, k * n + n));
+  const title = multi ? labels.map((l, k) => `${l.slice(-1)} ${per[k]}`).join(" + ") + " 通りのミノ順" :
+    `${per[0]}${n < 720 ? " / " + n : ""} 通りのミノ順`;
+  el.innerHTML = `<h2><label><input type="checkbox" data-pin="${p.key}"${on ? " checked" : ""}>` +
     `<span>${title} <small>· ${multi ? "" : labels[0] + " · "}${p.r} 段目${p.n ? " · " + p.n : ""}</small></span></label></h2>` +
     `<div class="sides">` + p.sides.map((side, k) => {
       const t = side.ts[side.shown];
-      return `<div class="side">` + (multi ? `<h4>${labels[k]}</h4>` : "") + boardSvg(t.f, __MAXH__) +
-        (side.ts.length > 1 ? `<div class="tiling"><button data-cycle="${p.id}" data-side="${k}">◀▶</button>` +
-          `<span>ミノ割り ${side.shown + 1} / ${side.ts.length} (この割り方で ${count(t.st, maxSoft)} 通り)</span></div>` : "") +
+      return `<div class="side">` + (multi ? `<h4>${labels[k]}</h4>` : "") +
+        `<div class="board" data-after="${p.key}" title="クリックでライン消去前 / 後を切り替え">` +
+        (p.after ? `<small>消去後</small>` + boardSvg(afterClear(t.f), __MAXH__) : boardSvg(t.f, __MAXH__)) + `</div>` +
+        `<div class="tiling"><button class="icon" data-copy="${p.key}" data-side="${k}" title="この盤面を 04/board.html に貼れる形でコピー" aria-label="コピー">${COPY_ICON}</button>` +
+        (side.ts.length > 1 ? `<button data-cycle="${p.key}" data-side="${k}">◀▶</button>` +
+          `<span>ミノ割り ${side.shown + 1} / ${side.ts.length} (この割り方で ${count(t.st, maxSoft)} 通り)</span>` : "") + `</div>` +
         `<canvas class="map"></canvas></div>`;
     }).join("") + `</div>`;
-  el.querySelectorAll("canvas").forEach((c, k) => drawMap(c, p.st, maxSoft, k * 720));
+  el.querySelectorAll("canvas").forEach((c, k) => drawMap(c, p.st, maxSoft, k * n, ord));
   return el;
 }
 
 // 2 つのシルエットの組の網羅数。ミノ順の集合を 32 bit ごとの配列で持ち、全ペアを調べる
 const pop = x => { x -= x >>> 1 & 0x55555555; x = (x & 0x33333333) + (x >>> 2 & 0x33333333); return (x + (x >>> 4) & 0x0f0f0f0f) * 0x01010101 >>> 24; };
+// ミノ順集合が同じシルエットはまとめて 1 回だけ比べる (全網羅の組数はまとめた数を掛けて数える)。
+// 上位の組には、まとめたうちの最も低いシルエットを代表として出す
 function bestPairs(usable, maxSoft) {
-  const sets = usable.map(p => {
+  const same = new Map();  // ミノ順集合 -> {w, ps}
+  for (const p of usable) {
     const w = new Uint32Array(Math.ceil(p.st.length / 32));
     for (let i = 0; i < p.st.length; i++) if (p.st[i] && p.st[i] - 1 <= maxSoft) w[i >> 5] |= 1 << (i & 31);
-    return w;
-  });
-  const total = usable.length ? usable[0].st.length : 0, words = sets.length ? sets[0].length : 0;
+    const key = w.join(",");
+    if (!same.has(key)) same.set(key, {w, ps: []});
+    same.get(key).ps.push(p);
+  }
+  const uniq = [...same.values()];
+  for (const u of uniq) u.ps.sort((a, b) => a.h - b.h);
+  const total = usable.length ? usable[0].st.length : 0, words = uniq.length ? uniq[0].w.length : 0;
   let full = 0;
-  const top = [];  // [網羅数, i, j] を網羅数の多い順に TOP_PAIRS 個まで
-  for (let i = 0; i < sets.length; i++) for (let j = i + 1; j < sets.length; j++) {
-    let n = 0;
-    for (let k = 0; k < words; k++) n += pop(sets[i][k] | sets[j][k]);
-    if (n === total) full++;
+  const top = [];  // [網羅数, p, q] を網羅数の多い順に TOP_PAIRS 個まで
+  const offer = (n, p, q) => {
     if (top.length < TOP_PAIRS || n > top[top.length - 1][0]) {
-      top.push([n, i, j]);
+      top.push([n, p, q]);
       top.sort((a, b) => b[0] - a[0]);
       if (top.length > TOP_PAIRS) top.pop();
     }
+  };
+  for (let i = 0; i < uniq.length; i++) {
+    const a = uniq[i];
+    if (a.ps.length > 1) {
+      let n = 0;
+      for (let k = 0; k < words; k++) n += pop(a.w[k]);
+      if (n === total) full += a.ps.length * (a.ps.length - 1) / 2;
+      offer(n, a.ps[0], a.ps[1]);
+    }
+    for (let j = i + 1; j < uniq.length; j++) {
+      const b = uniq[j];
+      let n = 0;
+      for (let k = 0; k < words; k++) n += pop(a.w[k] | b.w[k]);
+      if (n === total) full += a.ps.length * b.ps.length;
+      offer(n, a.ps[0], b.ps[0]);
+    }
   }
-  return {full, total, top: top.map(([n, i, j]) => [n, usable[i], usable[j]])};
+  return {full, total, top};
 }
 
+const pairCache = new Map();
+// ミノ順で絞り込む欄を出すか (出さない場合はマップのクリックでも絞り込まない)
+const ORDER_FILTER = __ORDER_FILTER__;
+$("order-controls").hidden = !ORDER_FILTER;
+$("legend-click").hidden = !ORDER_FILTER;
 const slots = $("slots");
 for (let i = 0; i < 6; i++) {
   if (i) slots.insertAdjacentHTML("beforeend", "<i>→</i>");
@@ -328,8 +407,8 @@ function setStart(s) {
   start = s;
   limit = PAGE;
   const rows = [...new Set(DATA[s].p.map(p => p.r))].sort();
-  $("rows").innerHTML = `<option value="">TSD の段: すべて</option>` +
-    rows.map(r => `<option value="${r}">TSD の段: ${r} 段目</option>`).join("");
+  $("rows").innerHTML = `<option value="">__SPIN__ の段: すべて</option>` +
+    rows.map(r => `<option value="${r}">__SPIN__ の段: ${r} 段目</option>`).join("");
   for (const b of $("tabs").children) b.setAttribute("aria-selected", b.dataset.start === s);
   draw();
 }
@@ -342,8 +421,8 @@ function draw() {
   }
   const maxSoft = Number($("maxsoft").value), rows = $("rows").value;
   const filtered = pat.some(Boolean);
-  const match = ORDERS.map(o => pat.every((p, i) => !p || o[i] === p));
-  const group = DATA[start], labels = group.l, total = 720 * labels.length;
+  const group = DATA[start], labels = group.l, n = group.ord.length, total = n * labels.length;
+  const match = group.ord.map(o => pat.every((p, i) => !p || o[i] === p));
   for (const id of ["grid", "pinned-grid"]) $(id).classList.toggle("wide", labels.length > 1);
 
   // 条件 (ソフトドロップ・段) を満たすシルエット。集計はミノ順の絞り込みをかける前の値で出す
@@ -356,23 +435,26 @@ function draw() {
   }
   const covered = count(union, maxSoft);
   $("stats").innerHTML =
-    labels.map((l, k) => `<div class="stat">${boardSvg(group.f[k], 2)}<span>開始形状 ${l}</span></div>`).join("") + [
+    labels.map((l, k) => isEmpty(group.f[k]) ? "" :
+      `<div class="stat">${boardSvg(group.f[k], 2)}<span>開始形状 ${l}</span></div>`).join("") + [
       [usable.length, labels.length > 1 ? "A・B 共通のシルエット" : "シルエット"],
-      [`${covered} / ${total}`, "TSD を打てるミノ順" + (labels.length > 1 ? " (A 720 + B 720)" : "")],
+      [`${covered} / ${total}`, "__SPIN__ を打てるミノ順" + (labels.length > 1 ? ` (A ${n} + B ${n})` : group.first ? ` (${group.first} 始動)` : "")],
       [`${count(union, 0)} / ${total}`, "うちソフトドロップなし"],
       [`${total - covered} / ${total}`, "打てないミノ順"],
     ].map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
   mapsInto($("union"), union, maxSoft);
 
-  // 2 つの組み合わせ
-  const pairs = bestPairs(usable, maxSoft);
+  // 2 つの組み合わせ (シルエットが多いと重いので、条件ごとに 1 回だけ計算する)
+  const pairKey = `${start}|${maxSoft}|${rows}`;
+  if (!pairCache.has(pairKey)) pairCache.set(pairKey, bestPairs(usable, maxSoft));
+  const pairs = pairCache.get(pairKey);
   $("pairs-text").innerHTML = pairs.top.length === 0 ? "シルエットが 2 つ以上ありません。" :
     pairs.full ? `2 つで全 ${total} 通りを網羅できる組: <b>${pairs.full} 組</b>` :
     `2 つで全 ${total} 通りを網羅できる組はありません (最大 <b>${pairs.top[0][0]} / ${total}</b>)。`;
   $("pairs-list").replaceChildren(...pairs.top.map(([n, a, b]) => {
     const el = document.createElement("button");
     el.className = "pair";
-    el.dataset.pair = a.id + "," + b.id;
+    el.dataset.pair = a.key + "," + b.key;
     el.title = "この 2 つをチェックする";
     el.innerHTML = boardSvg(a.sides[0].ts[0].f, __MAXH__) + boardSvg(b.sides[0].ts[0].f, __MAXH__) +
       `<span><b>${n}</b> / ${total} <small>(${Math.round(n / total * 100)}%)</small></span>`;
@@ -398,15 +480,19 @@ function draw() {
   for (const p of mine) merge(pu, p.st);
   const pc = count(pu, maxSoft);
   $("coverage-text").innerHTML = `チェックしたシルエットで網羅できるミノ順: <b>${pc} / ${total}</b> (${Math.round(pc / total * 100)}%)` +
-    (labels.length > 1 ? " — " + labels.map((l, k) => `${l}: ${count(pu, maxSoft, null, k * 720, k * 720 + 720)} / 720`).join(", ") : "");
+    (labels.length > 1 ? " — " + labels.map((l, k) => `${l}: ${count(pu, maxSoft, null, k * n, k * n + n)} / ${n}`).join(", ") : "");
   mapsInto($("pinned-map"), pu, maxSoft);
 }
 
+// 開始形状が空の盤面だけ (開幕) なら、タブと開始形状の説明を出さない
+$("tabs").hidden = Object.keys(DATA).length === 1;
+$("legend-start").hidden = Object.values(DATA).every(g => g.f.every(isEmpty));
 for (const gid of Object.keys(DATA)) {
   const b = document.createElement("button"), g = DATA[gid];
   b.setAttribute("role", "tab");
   b.dataset.start = gid;
-  b.innerHTML = g.l.length > 1 ? `${gid.slice(0, -2)} 共通<small>A・B 同形<br>${g.p.length} 種類</small>` : gid + boardSvg(g.f[0], 2);
+  b.innerHTML = g.l.length > 1 ? `${gid.slice(0, -2)} 共通<small>A・B 同形<br>${g.p.length} 種類</small>` :
+    isEmpty(g.f[0]) ? `${gid}<small>${g.p.length} 種類</small>` : gid + boardSvg(g.f[0], 2);
   b.addEventListener("click", () => setStart(gid));
   $("tabs").append(b);
 }
@@ -433,6 +519,18 @@ main.addEventListener("click", e => {
     $("pinned").scrollIntoView({behavior: "smooth", block: "start"});
     return;
   }
+  const board = e.target.closest(".board");
+  if (board) {
+    const p = byId.get(board.dataset.after);
+    p.after = !p.after;
+    draw();
+    return;
+  }
+  const cp = e.target.dataset && e.target.dataset.copy;
+  if (cp) {
+    copyText(boxText(byId.get(cp), Number(e.target.dataset.side)), e.target);
+    return;
+  }
   const cyc = e.target.dataset && e.target.dataset.cycle;
   if (cyc) {
     const side = byId.get(cyc).sides[Number(e.target.dataset.side)];
@@ -443,7 +541,8 @@ main.addEventListener("click", e => {
   if (!e.target.classList.contains("map")) return;
   const i = mapIndex(e.target, e);
   if (i < 0) return;
-  selects.forEach((s, k) => s.value = ORDERS[i][k]);
+  if (!ORDER_FILTER) return;
+  selects.forEach((s, k) => s.value = DATA[start].ord[i][k]);
   limit = PAGE;
   draw();
 });
@@ -453,11 +552,15 @@ main.addEventListener("mousemove", e => {
   tip.hidden = i < 0;
   if (i < 0) return;
   const s = e.target.st[e.target.off + i], ok = s && s - 1 <= e.target.maxSoft;
-  tip.textContent = ORDERS[i] + (!ok ? ": 組めない" : s === 1 ? ": ソフトドロップなし" : `: ソフトドロップ ${s - 1} 回`);
+  tip.textContent = e.target.ord[i] + (!ok ? ": 組めない" : s === 1 ? ": ソフトドロップなし" : `: ソフトドロップ ${s - 1} 回`);
   tip.style.left = Math.min(e.clientX + 12, window.innerWidth - 220) + "px";
   tip.style.top = e.clientY + 14 + "px";
 });
 main.addEventListener("mouseleave", () => { tip.hidden = true; });
+$("copy-pinned").addEventListener("click", e => {
+  const mine = [...pinned].map(id => byId.get(id)).filter(p => p.gid === start);
+  copyText(mine.flatMap(p => p.sides.map((_, k) => boxText(p, k))).join("\n"), e.target);
+});
 $("unpin-all").addEventListener("click", () => { unpinGroup(); savePinned(); draw(); });
 $("reset").addEventListener("click", () => { selects.forEach(s => s.value = ""); limit = PAGE; draw(); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
@@ -470,23 +573,32 @@ setStart(start);
 DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 
-def encode_orders(orders: dict[str, str]) -> str:
-    """ミノ順 -> ソフトドロップ対象ミノ を、36 進 2 桁のミノ順番号 + ソフトドロップ回数の列にする。"""
+def encode_orders(orders: dict[str, str], first: str | None = None) -> str:
+    """ミノ順 -> ソフトドロップ対象ミノ を、36 進 2 桁のミノ順番号 + ソフトドロップ回数の列にする。
+
+    first (始動ミノ) を指定すると、ミノ順番号はそのミノで始まる 120 通りの中での番号になる。
+    """
     out = []
     for order, soft in orders.items():
         i = ORDER_INDEX[order]
+        if first:
+            assert order[0] == first
+            i -= NAMES.index(first) * 120
         out.append(DIGITS[i // 36] + DIGITS[i % 36] + str(len(soft)))
     return "".join(out)
 
 
-def group(labels: list[str], fields: list[str], members: list[list[dict]]) -> dict:
+def group(labels: list[str], fields: list[str], members: list[list[dict]], first: str | None = None) -> dict:
     """タブ 1 つ分のデータ。
 
     labels / fields は開始形状の名前と形 (通常 1 つ。複数の開始形状に共通のシルエットを扱うなら複数)、
     members の各要素は開始形状ごとのパターン (lib.followup.load_patterns の値) を並べたもの。
     パターンに note があれば、カードの見出しに補足として表示する。
+    first (始動ミノ) を指定すると、そのミノで始まる 120 通りのミノ順だけを扱うタブになる
+    (members のミノ順はそのミノで始まるものだけにしておく)。
     """
     return {
+        **({"first": first} if first else {}),
         "l": labels,
         "f": fields,
         "p": [
@@ -494,21 +606,35 @@ def group(labels: list[str], fields: list[str], members: list[list[dict]]) -> di
                 "id": "+".join(p["id"] for p in ps),
                 "r": ps[0]["rows"],
                 "n": ps[0].get("note", ""),
-                "s": [[[field, encode_orders(orders)] for field, orders in p["tilings"]] for p in ps],
+                "s": [[[field, encode_orders(orders, first)] for field, orders in p["tilings"]] for p in ps],
             }
             for ps in members
         ],
     }
 
 
-def write_html(path: Path, data: dict[str, dict], title: str, lead: str, max_height: int, pin_key: str) -> None:
-    """data はタブ名 -> group() の値。lead は見出し下の説明文 (HTML)。"""
+def write_html(
+    path: Path,
+    data: dict[str, dict],
+    title: str,
+    lead: str,
+    max_height: int,
+    pin_key: str,
+    spin: str = "TSD",
+    order_filter: bool = True,
+) -> None:
+    """data はタブ名 -> group() の値。lead は見出し下の説明文 (HTML)。spin は "TSD" か "TSS"。
+
+    order_filter が False なら、ミノ順で絞り込む欄を出さない。
+    """
     html = (
         HTML_TEMPLATE.replace("__DATA__", json.dumps(data, ensure_ascii=False, separators=(",", ":")))
         .replace("__MAXH__", str(max_height))
         .replace("__TITLE__", title)
         .replace("__LEAD__", lead)
         .replace("__PIN_KEY__", pin_key)
+        .replace("__SPIN__", spin)
+        .replace("__ORDER_FILTER__", "true" if order_filter else "false")
     )
     path.write_text(html, encoding="utf-8")
     print(f"wrote {path}")

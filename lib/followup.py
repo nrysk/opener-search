@@ -1,11 +1,14 @@
-"""ある形 (前の巡の TSD 後に残る形) から、次の 1 巡で TSD を打てる形を全列挙する (SRS)。
+"""ある形 (前の巡の TSD 後に残る形や空の盤面) から、次の 1 巡で T スピンを打てる形を全列挙する (SRS)。
 
-開始形状に 6 ミノ (I J L S Z O) を来た順にホールドなしで置き、最後に来た T で TSD を打つ。
-720 通りのミノ順すべてについて、TSD を打てる最終形を求める。05, 06 で共有する。
+開始形状に 6 ミノ (I J L S Z O) を来た順にホールドなしで置き、最後に来た T で TSD (または TSS) を打つ。
+720 通りのミノ順すべてについて、T スピンを打てる最終形を求める。05, 06, 10 で共有する。
 
+- lines = 2 なら TSD、lines = 1 なら TSS (どちらも Mini は除き、ちょうどその段数だけ消えるもの)
+- 重い盤面探索は C++ (lib/spin_search.cpp、初回実行時に build/ へ自動ビルド)。ミノ割りの列挙と
+  ミノ順ごとの検証は Python で行い、両者の結果が一致することを確かめている
 - T を置く前の高さは max_height 段以下に制限する (制限なしでは組み合わせ爆発する)
 - T を置く前にラインが消える置き方は扱わない
-- TSD で消す段は 1-2 段目から (max_height-1)-(max_height) 段目まですべて調べる
+- 消す段は下の段が 1 段目から (max_height-1) 段目までをすべて調べる
 - 「シルエット」は T を置く前に埋まっているマスの集合。同じシルエットでもミノの
   割り当て (ミノ割り) が複数ありうるので、ミノ割りごとに組めるミノ順を記録する
 - ソフトドロップが必要な置き方も含める (回数の定義は 01 と同じ。最後の T は含めない)
@@ -20,13 +23,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import heapq
+import os
+import subprocess
 import sys
 import time
 from itertools import combinations, permutations
 from multiprocessing import Pool
 from pathlib import Path
 
-from lib.srs import PIECES, H, W, find_tsd, row_mask
+from lib.srs import PIECES, H, W, find_tspin, row_mask
 
 NAMES = "IJLSZO"
 ORDERS = ["".join(p) for p in permutations(NAMES)]
@@ -59,46 +65,50 @@ def parse_board(field: str) -> int:
     return board
 
 
-def silhouettes(start: int, row: int, max_height: int) -> list[tuple[int, int, int, int]]:
-    """row, row+1 段目 (0 始まり) で TSD を打てる (盤面, ミノ順集合, T のマスク, T の向き) の一覧。
+# 消す段数 -> T を置く前に消す段の中で埋まっている必要があるマス数 (TSD は 20 - 4、TSS は 10 - 3)
+NEED = {2: 2 * W - 4, 1: W - 3}
+SPIN = {2: "TSD", 1: "TSS"}
 
-    (使ったミノの集合, 盤面) を状態として、そこに到達できるミノ順の集合を手数ごとに求める。
+
+def rows_label(row: int, lines: int) -> str:
+    """消す段の表記 (1 始まり)。TSD は "1-2"、TSS は "1"。"""
+    return "-".join(str(row + 1 + i) for i in range(lines))
+
+
+def silhouettes(start: int, row: int, max_height: int, lines: int = 2) -> list[tuple[int, int, int, int]]:
+    """row 段目 (0 始まり) から lines 段を T スピンで消せる (盤面, ミノ順集合, T のマスク, T の向き) の一覧。
+
+    盤面とミノ順集合は C++ (lib/spin_search.cpp) で求め、T の位置はここで find_tspin を使って求める。
     """
-    target = ROWS[row] | ROWS[row + 1]
-    outside = ~target
-    # 消去する 2 段の外に置けるブロック数の上限 (T を置く前に 2 段で 16 マス埋まる)
-    max_outside = start.bit_count() + 24 - 16
-    limit = (1 << (max_height * W)) - 1
-    rows = ROWS[:max_height]
-    layer = {start << 6: 1}  # 盤面 << 6 | 使ったミノ -> ミノ順集合
-    for k in range(6):
-        nxt: dict[int, int] = {}
-        w = WEIGHT[k]
-        for key, orders in layer.items():
-            used, board = key & 63, key >> 6
-            rank = 0
-            for ci, c in enumerate(NAMES):
-                if used >> ci & 1:
-                    continue
-                shifted = orders << (rank * w)
-                rank += 1
-                used2 = used | 1 << ci
-                for m in PIECES[c].placements(board):
-                    nb = board | m
-                    if nb > limit or (nb & outside).bit_count() > max_outside:
-                        continue
-                    # T より前にラインが消えてはいけない
-                    if any(nb & r == r for r in rows):
-                        continue
-                    key2 = nb << 6 | used2
-                    nxt[key2] = nxt.get(key2, 0) | shifted
-        layer = nxt
+    target = 0
+    for i in range(lines):
+        target |= ROWS[row + i]
+    res = subprocess.run(
+        [str(spin_search_binary()), f"{start:x}", str(row), str(lines), str(max_height)],
+        capture_output=True, text=True, check=True,
+    )
     out = []
-    for key, orders in layer.items():
-        hit = find_tsd(key >> 6, target)
-        if hit is not None:
-            out.append((key >> 6, orders, hit[0], hit[1]))
+    for line in res.stdout.splitlines():
+        board_hex, orders_bin = line.split()
+        board = int(board_hex, 16)
+        hit = find_tspin(board, target, NEED[lines])
+        assert hit is not None, (row, board_hex)
+        out.append((board, int(orders_bin, 2), hit[0], hit[1]))
     return out
+
+
+SPIN_SEARCH_SRC = Path(__file__).resolve().parent / "spin_search.cpp"
+SPIN_SEARCH_BIN = Path(__file__).resolve().parent.parent / "build" / "spin_search"
+
+
+def spin_search_binary() -> Path:
+    """C++ の探索プログラムのパス。無いかソースより古ければビルドする。"""
+    src, binary = SPIN_SEARCH_SRC, SPIN_SEARCH_BIN
+    if not binary.exists() or binary.stat().st_mtime < src.stat().st_mtime:
+        binary.parent.mkdir(exist_ok=True)
+        cxx = os.environ.get("CXX", "c++")
+        subprocess.run([cxx, "-O2", "-std=c++20", "-o", str(binary), str(src)], check=True)
+    return binary
 
 
 # ミノごとに、最下位ビット -> その位置を最下位とするマスクの一覧 (ミノ割りの列挙用)
@@ -172,11 +182,11 @@ def field_string(start_field: str, tiling: dict[str, int], t_mask: int, max_heig
     return "/".join(lines)
 
 
-def solve(task: tuple[str, str, int, int]) -> list[dict]:
-    sid, start_field, row, max_height = task
+def solve(task: tuple[str, str, int, int, int]) -> list[dict]:
+    sid, start_field, row, max_height, lines = task
     start = parse_board(start_field)
     out = []
-    for n, (board, orders, t_mask, t_rot) in enumerate(sorted(silhouettes(start, row, max_height))):
+    for n, (board, orders, t_mask, t_rot) in enumerate(sorted(silhouettes(start, row, max_height, lines))):
         expected = {o for o in ORDERS if orders >> ORDER_BIT[o] & 1}
         found: set[str] = set()
         for tiling in tilings(board ^ start):
@@ -188,7 +198,7 @@ def solve(task: tuple[str, str, int, int]) -> list[dict]:
                 {
                     "start": sid,
                     "start_field": start_field,
-                    "tsd_rows": f"{row + 1}-{row + 2}",
+                    ROWS_COLUMN[lines]: rows_label(row, lines),
                     "silhouette": f"{sid}-{row + 1}-{n + 1:03d}",
                     "t_rotation": "0R2L"[t_rot],
                     "orders_count": len(ok),
@@ -201,17 +211,28 @@ def solve(task: tuple[str, str, int, int]) -> list[dict]:
     return out
 
 
-def run(starts: dict[str, str], max_height: int, csv_path: Path, processes: int) -> None:
-    """全開始形状 x TSD の段を並列に探索し、csv_path に書き出して要約を表示する。"""
+# CSV で消す段を書く列の名前 (05, 06 の CSV との互換のため TSD は tsd_rows)
+ROWS_COLUMN = {2: "tsd_rows", 1: "tss_rows"}
+
+
+def run(
+    starts: dict[str, str], max_height: int, csv_path: Path, processes: int, lines: int = 2, spin_rows: list[int] | None = None
+) -> None:
+    """全開始形状 x 消す段を並列に探索し、csv_path に書き出して要約を表示する。
+
+    spin_rows は調べる消す段 (下の段、1 始まり)。省略時は 1 段目から (max_height-1) 段目まで。
+    """
+    spin = SPIN[lines]
     parser = argparse.ArgumentParser()
     parser.add_argument("--only", nargs="*", help="動作確認用: 調べる開始形状")
-    parser.add_argument("--rows", nargs="*", type=int, help="動作確認用: TSD の下の段 (1 始まり)")
+    parser.add_argument("--rows", nargs="*", type=int, help=f"動作確認用: {spin} の下の段 (1 始まり)")
     parser.add_argument("--keep", action="store_true", help="--only と併用: 既存の CSV にある他の開始形状の行を残す")
     args = parser.parse_args()
     sids = args.only or list(starts)
-    rows = [r - 1 for r in args.rows] if args.rows else list(range(max_height - 1))
-    tasks = [(sid, starts[sid], row, max_height) for sid in sids for row in rows]
+    rows = [r - 1 for r in args.rows or spin_rows or range(1, max_height)]
+    tasks = [(sid, starts[sid], row, max_height, lines) for sid in sids for row in rows]
 
+    spin_search_binary()  # 並列実行の前に一度だけビルドしておく
     began = time.time()
     results = []
     with Pool(processes, maxtasksperchild=1) as pool:
@@ -226,7 +247,7 @@ def run(starts: dict[str, str], max_height: int, csv_path: Path, processes: int)
         position = {sid: i for i, sid in enumerate(starts)}
         results.sort(key=lambda r: position[r["start"]])  # 安定ソートなので開始形状の中の順は変わらない
 
-    fields = ["start", "start_field", "tsd_rows", "silhouette", "t_rotation", "orders_count", "field", "orders"]
+    fields = ["start", "start_field", ROWS_COLUMN[lines], "silhouette", "t_rotation", "orders_count", "field", "orders"]
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
@@ -237,12 +258,12 @@ def run(starts: dict[str, str], max_height: int, csv_path: Path, processes: int)
         covered = {o.split(":")[0] for r in mine for o in r["orders"].split()}
         hard = {o for r in mine for o in r["orders"].split() if ":" not in o}
         per_row = ", ".join(
-            f"{row + 1}-{row + 2} 段目 {len({r['silhouette'] for r in mine if r['tsd_rows'] == f'{row + 1}-{row + 2}'})}"
+            f"{rows_label(row, lines)} 段目 {len({r['silhouette'] for r in mine if r[ROWS_COLUMN[lines]] == rows_label(row, lines)})}"
             for row in rows
         )
         print(
             f"{sid}: シルエット {len({r['silhouette'] for r in mine})} 種類 ({per_row}), "
-            f"ミノ割り {len(mine)} 種類, TSD を打てるミノ順 {len(covered)}/720 "
+            f"ミノ割り {len(mine)} 種類, {spin} を打てるミノ順 {len(covered)}/720 "
             f"(ソフトドロップなし {len(hard)}/720)"
         )
     print(f"wrote {csv_path}")
@@ -262,7 +283,7 @@ def load_patterns(csv_path: Path) -> dict[str, dict]:
             {
                 "id": r["silhouette"],
                 "start": r["start"],
-                "rows": r["tsd_rows"],
+                "rows": r["tsd_rows"] if "tsd_rows" in r else r["tss_rows"],
                 # T を置く前に埋まっているマス (ミノの区別なし)
                 "cells": "/".join("".join("_" if c in "_T" else "X" for c in line) for line in r["field"].split("/")),
                 "tilings": [],
@@ -292,6 +313,9 @@ def pair_report(groups: list[tuple[str, int, list[tuple[str, str, dict[int, int]
     """グループ (名前, ミノ順の総数, [(id, 盤面, {ソフトドロップ上限: ミノ順集合})]) ごとに全ペアの網羅数を調べる。
 
     グループ x 条件ごとの上位 top 組を pairs_csv に書き、要約を表示する。
+    シルエットが多くても計算できるよう、ミノ順集合が同じシルエットはまとめて 1 回だけ比べる
+    (全網羅の組数は、まとめたシルエットの数を掛けて数えるので正確)。上位の組には、まとめたうちの
+    先頭のシルエットを代表として書く。
     """
     with pairs_csv.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -300,12 +324,26 @@ def pair_report(groups: list[tuple[str, int, list[tuple[str, str, dict[int, int]
             line = f"{name}: シルエット {len(members)} 種類"
             for cond, m in CONDITIONS:
                 best1 = max((c[m].bit_count() for _, _, c in members), default=0)
-                pairs = sorted(
-                    (((x[2][m] | y[2][m]).bit_count(), x, y) for x, y in combinations(members, 2)),
-                    key=lambda t: -t[0],
-                )
-                full = sum(n == total for n, _, _ in pairs)
-                for n, x, y in pairs[:top]:
+                same: dict[int, list] = {}  # ミノ順集合 -> それを持つシルエット (members の順)
+                for x in members:
+                    if x[2][m]:  # この条件で 1 通りも組めないシルエットは組に入れない
+                        same.setdefault(x[2][m], []).append(x)
+                uniq = list(same.items())
+                full = 0
+                cands = []  # (網羅数, -登場順, シルエット 1, シルエット 2)
+                for i, (a, xs) in enumerate(uniq):
+                    if len(xs) > 1:
+                        n = a.bit_count()
+                        full += len(xs) * (len(xs) - 1) // 2 if n == total else 0
+                        cands.append((n, -i * len(uniq) - i, xs[0], xs[1]))
+                    for j in range(i + 1, len(uniq)):
+                        b, ys = uniq[j]
+                        n = (a | b).bit_count()
+                        if n == total:
+                            full += len(xs) * len(ys)
+                        cands.append((n, -i * len(uniq) - j, xs[0], ys[0]))
+                pairs = heapq.nlargest(top, cands, key=lambda t: t[:2])
+                for n, _, x, y in pairs:
                     writer.writerow([name, cond, x[0], y[0], n, total, x[1], y[1]])
                 label = "ソフトドロップなし" if m == 0 else "ソフトドロップあり"
                 best2 = pairs[0][0] if pairs else 0

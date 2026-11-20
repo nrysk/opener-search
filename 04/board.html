@@ -91,7 +91,7 @@
   </div>
   <div class="group">
     <button id="add" title="Box を追加 (ボードの空いた場所をダブルクリックでも追加)">＋ Box</button>
-    <button id="dup" title="選択中の Box を複製 (Ctrl/⌘+D、コピー&ペーストは Ctrl/⌘+C → V)。複数選択は Shift+クリックか、空いた場所をドラッグ">複製</button>
+    <button id="dup" title="選択中の Box を複製 (Ctrl/⌘+D、コピー&ペーストは Ctrl/⌘+C → V。可視化ページの「コピー」で写した盤面も Ctrl/⌘+V で貼れる)。複数選択は Shift+クリックか、空いた場所をドラッグ">複製</button>
     <button id="del" title="選択中の Box を削除 (Delete)">削除</button>
   </div>
   <div class="group">
@@ -570,6 +570,71 @@ $("file").addEventListener("change", async e => {
   }
 });
 
+// ---- コピー&ペースト ----
+// OS のクリップボードには、Box 1 つを 1 行「タイトル<Tab>盤面」で書く。盤面は上の段から "/" 区切り
+// ("_" が空白。小文字は大文字として読む)。可視化ページ (05, 06, 10 の patterns.html) の「コピー」もこの形式。
+// この画面の中でコピーしたものは、複数 Box の位置関係を保てるよう clipboard にも持っておく
+let clipboardText = null;
+const toText = b => {
+  const rows = [];
+  for (let y = 0; y < SIZE; y++) rows.push(b.cells.slice(y * SIZE, y * SIZE + SIZE));
+  while (rows.length > 1 && rows[0] === "_".repeat(SIZE)) rows.shift();  // 上の空の段は省く
+  return (b.title ? b.title.replace(/[\t\n]/g, " ") + "\t" : "") + rows.join("/");
+};
+// テキストから Box の一覧 [{title, cells}] を読む。読めない行があれば null
+function parseBoxes(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const out = [];
+  for (const line of lines) {
+    const tab = line.lastIndexOf("\t");
+    const title = tab < 0 ? "" : line.slice(0, tab).trim(), field = (tab < 0 ? line : line.slice(tab + 1)).trim();
+    const rows = field.toUpperCase().split("/");
+    if (!rows.every(r => r.length === SIZE && /^[IOTSZJLX_]+$/.test(r))) return null;
+    const kept = rows.slice(-SIZE);  // 高すぎる場合は下の 10 段だけ
+    out.push({title, cells: "_".repeat(SIZE * (SIZE - kept.length)) + kept.join("")});
+  }
+  return out;
+}
+const editing = e => e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA";
+document.addEventListener("copy", e => {
+  if (editing(e)) return;
+  const bs = selBoxes();
+  if (!bs.length) return;
+  e.preventDefault();
+  clipboard = bs.map(b => ({title: b.title, cells: b.cells, x: b.x, y: b.y}));
+  clipboardText = bs.map(toText).join("\n");
+  e.clipboardData.setData("text/plain", clipboardText);
+});
+document.addEventListener("paste", e => {
+  if (editing(e)) return;
+  const text = e.clipboardData.getData("text/plain");
+  let sources;
+  if (clipboard && text === clipboardText) {
+    sources = clipboard;  // この画面でコピーしたもの: 位置関係を保つ
+  } else {
+    const parsed = parseBoxes(text);
+    if (!parsed) {
+      if (text.trim()) $("status").textContent = "貼り付けた文字列を盤面として読めませんでした";
+      return;
+    }
+    sources = parsed.map((b, i) => ({...b, x: i * 276, y: 0}));  // 外から貼ったもの: 横に並べる
+  }
+  e.preventDefault();
+  // ポインタがボード上にあればその位置へ、なければ画面の中央 (この画面のコピーならコピー元の右隣) へ貼る
+  const xs = sources.map(b => b.x), ys = sources.map(b => b.y);
+  const minX = Math.min(...xs), minY = Math.min(...ys);
+  if (pointer && document.elementFromPoint(...pointer) === board) {
+    const [x, y] = toBoard(...pointer);
+    copyBoxes(sources, x - 130 - minX, y - 20 - minY);
+  } else if (sources === clipboard) {
+    copyBoxes(sources, Math.max(...xs) - minX + 276, 0);
+  } else {
+    const [x, y] = viewCenter();
+    copyBoxes(sources, x - minX, y - minY);
+  }
+});
+
 // ---- キーボード ----
 window.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") {
@@ -579,23 +644,6 @@ window.addEventListener("keydown", e => {
   const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
   if (mod && key === "z") { e.preventDefault(); $(e.shiftKey ? "redo" : "undo").click(); }
   else if (mod && key === "y") { e.preventDefault(); $("redo").click(); }
-  else if (mod && key === "c") {
-    const bs = selBoxes();
-    if (bs.length) clipboard = bs.map(b => ({title: b.title, cells: b.cells, x: b.x, y: b.y}));
-  }
-  else if (mod && key === "v") {
-    if (!clipboard) return;
-    e.preventDefault();
-    // ポインタがボード上にあればその位置へ、なければコピー元の右隣へ貼る (複数なら相対位置を保つ)
-    const xs = clipboard.map(b => b.x), ys = clipboard.map(b => b.y);
-    const minX = Math.min(...xs), minY = Math.min(...ys);
-    if (pointer && document.elementFromPoint(...pointer) === board) {
-      const [x, y] = toBoard(...pointer);
-      copyBoxes(clipboard, x - 130 - minX, y - 20 - minY);
-    } else {
-      copyBoxes(clipboard, Math.max(...xs) - minX + 276, 0);
-    }
-  }
   else if (mod && key === "a") { e.preventDefault(); setSelection(state.boxes.map(b => b.id)); }
   else if (mod && key === "d") { e.preventDefault(); duplicate(); }
   else if (mod) return;

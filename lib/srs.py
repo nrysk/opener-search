@@ -202,7 +202,21 @@ def find_tsd(board: int, target: int) -> tuple[int, int, int] | None:
 
     戻り値は (T のマスク, 回転状態, キック番号)。
     """
-    if (board & target).bit_count() < 2 * W - 4:
+    return find_tspin(board, target, 2 * W - 4)
+
+
+def find_tss(board: int, target: int) -> tuple[int, int, int] | None:
+    """board に T を入れて target の 1 段だけを消す T-Spin Single (Mini は除く) を探す。"""
+    return find_tspin(board, target, W - 3)
+
+
+def find_tspin(board: int, target: int, need: int) -> tuple[int, int, int] | None:
+    """board に T を入れて、ちょうど target の段だけを消す T スピン (Mini は除く) を探す。
+
+    need は T を入れる前に target の中で埋まっている必要があるマス数の下限 (枝刈り用)。
+    戻り値は (T のマスク, 回転状態, キック番号)。
+    """
+    if (board & target).bit_count() < need:
         return None
     t = PIECES["T"]
     mask, down = t.mask, t.down
@@ -211,9 +225,10 @@ def find_tsd(board: int, target: int) -> tuple[int, int, int] | None:
             for dst, kick in cands:
                 if mask[dst] & board:
                     continue
-                # dst は s から回転で入った位置。そのまま接地して 2 段消えるか
+                # dst は s から回転で入った位置。そのまま接地して target の段が消えるか
                 d = down[dst]
-                if (d < 0 or mask[d] & board) and (board | mask[dst]) & target == target:
+                nb = board | mask[dst]
+                if (d < 0 or mask[d] & board) and nb & target == target and not _extra_line(nb, mask[dst], target):
                     r, x, y = t.decode(dst)
                     cx, cy = x + 1, y + 1
                     corners = sum(occupied(board, cx + dx, cy + dy) for dx, dy in T_CORNERS)
@@ -222,6 +237,15 @@ def find_tsd(board: int, target: int) -> tuple[int, int, int] | None:
                         return mask[dst], r, kick
                 break
     return None
+
+
+def _extra_line(board: int, t_mask: int, target: int) -> bool:
+    """T を置いた盤面で、T が触れる段のうち target 以外の段がそろっているか。"""
+    for y in range(H):
+        r = row_mask(y)
+        if t_mask & r and not target & r and board & r == r:
+            return True
+    return False
 
 
 def field_string(placed: list[tuple[str, int]]) -> str:
