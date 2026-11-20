@@ -72,9 +72,10 @@
   .grid { background: var(--grid); border: 1px solid var(--grid); display: grid; gap: 1px; touch-action: none; cursor: crosshair; }
   .row { display: grid; grid-template-columns: repeat(10, 22px); gap: 1px; }
   .cell { width: 22px; height: 22px; background: var(--cell); }
-  /* ライン消去モード: 消す行を強調する */
+  /* ライン消去 / 挿入モード: 対象の行を強調する (挿入は、その行の下側に空の行が入る位置を示す) */
   body.line .grid { cursor: pointer; }
-  body.line .box.sel .row:hover .cell { box-shadow: inset 0 0 0 2px var(--danger); opacity: .75; }
+  body.line-del .box.sel .row:hover .cell { box-shadow: inset 0 0 0 2px var(--danger); opacity: .75; }
+  body.line-ins .box.sel .row:hover .cell { box-shadow: inset 0 -3px 0 0 var(--accent); }
   /* 選択していない Box のマスは、クリックで選択するだけ */
   .box:not(.sel) .grid, body.line .box:not(.sel) .grid, body.stamp .box:not(.sel) .grid { cursor: pointer; }
 
@@ -146,7 +147,9 @@
     <tr><td><kbd>E</kbd></td><td>消しゴム</td></tr>
     <tr><td><kbd>R</kbd> / <kbd>Shift</kbd> + <kbd>R</kbd></td><td>貼り付けるミノを右 / 左に回転</td></tr>
     <tr><td><kbd>X</kbd></td><td>ライン消去モードの切り替え</td></tr>
-    <tr><td><kbd>Esc</kbd></td><td>貼り付け・ライン消去モードを抜ける</td></tr>
+    <tr><td><kbd>Shift</kbd> + <kbd>X</kbd></td><td>ライン挿入モードの切り替え (クリックした位置に空の行を入れ、そこから上を押し上げる)</td></tr>
+    <tr><td><kbd>G</kbd></td><td>灰で塗るモード (もう一度押すと 薄い灰 → 灰 → 濃い灰 の順に切り替え)</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>貼り付け・ライン消去・ライン挿入モードを抜ける</td></tr>
     <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>選択中の Box を削除</td></tr>
     <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>Z</kbd></td><td>選択中の Box の変更を元に戻す (履歴は Box ごと)。何も選択していなければ、削除した Box を戻す</td></tr>
     <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd> / <kbd>Ctrl/⌘</kbd> + <kbd>Y</kbd></td><td>選択中の Box の変更をやり直す。何も選択していなければ、戻した Box をもう一度削除</td></tr>
@@ -181,6 +184,7 @@
   </div>
   <div class="group">
     <button id="line" class="danger" aria-pressed="false" title="クリックした行を消して上を 1 段落とす (X)">ライン消去</button>
+    <button id="insert" aria-pressed="false" title="クリックした位置に空の行を入れ、その行から上を 1 段押し上げる (Shift+X)">ライン挿入</button>
     <button id="full" title="選択中の Box で、横一列そろった行をすべて消す">そろった行を消す</button>
     <button id="clear" title="選択中の Box を空にする">全消し</button>
   </div>
@@ -202,10 +206,11 @@
 
 <script>
 const SIZE = 10, CELL = 23, STORE_KEY = "tki-board-v2", OLD_STORE_KEY = "tki-board-v1", MAX_HISTORY = 300;
-// 色: テトリミノ 7 色 + お邪魔 (灰) + 消しゴム ("")
+// 色: テトリミノ 7 色 + 灰 3 段階 (W: 薄い灰、X: 灰、K: 濃い灰) + 消しゴム ("")
 const COLORS = [
   ["I", "#35b8d6"], ["O", "#e6b422"], ["T", "#9b4fd0"], ["S", "#4caf50"],
-  ["Z", "#e0483e"], ["J", "#3a66d0"], ["L", "#ef8a24"], ["X", "#8a93a0"], ["", ""],
+  ["Z", "#e0483e"], ["J", "#3a66d0"], ["L", "#ef8a24"],
+  ["W", "#bfc5ce"], ["X", "#8a93a0"], ["K", "#575e69"], ["", ""],
 ];
 const COLOR_OF = Object.fromEntries(COLORS);
 const $ = id => document.getElementById(id);
@@ -216,7 +221,10 @@ const BOARD_W = 6000, BOARD_H = 4000, ZOOM_MIN = 0.2, ZOOM_MAX = 2.5;
 // state は表示中のタブ。state.boxes: [{id, x, y, title, cells}]。cells は 100 文字 (上の段から。"_" は空)
 let doc = null, state = null;
 // selected: 選択中の Box の id (複数選択できる)。clipboard: コピーした Box の一覧
-let selected = new Set(), color = "T", lineMode = false, clipboard = null, zoom = 1;
+// lineMode: null / "delete" (ライン消去) / "insert" (ライン挿入)
+let selected = new Set(), color = "T", lineMode = null, clipboard = null, zoom = 1;
+const GRAYS = ["W", "X", "K"];
+const GRAY_NAMES = {W: "薄い灰", X: "灰", K: "濃い灰"};
 // ミノ貼り付けモード: {piece, rot} (null なら色塗り)。hover はポインタのあるマス {id, i}
 let stamp = null, hover = null, ghost = [];
 
@@ -267,7 +275,7 @@ function showGhost() {
 function setStamp(piece) {
   // 同じミノのキーをもう一度押したら回転する
   stamp = stamp && stamp.piece === piece ? {piece, rot: (stamp.rot + 1) % 4} : {piece, rot: 0};
-  lineMode = false;
+  lineMode = null;
   showGhost();
   updateBar();
 }
@@ -279,7 +287,7 @@ function rotateStamp(dir) {
 function setPaint(ch) {
   color = ch;
   stamp = null;
-  lineMode = false;
+  lineMode = null;
   clearGhost();
   updateBar();
 }
@@ -545,12 +553,16 @@ function updateBar() {
   $("undo").disabled = has ? !selBoxes().some(b => canStep(b, -1)) : !mem().trash.length;
   $("redo").disabled = has ? !selBoxes().some(b => canStep(b, 1)) : !mem().restored.length;
   for (const id of ["full", "clear", "dup", "del"]) $(id).disabled = !has;
-  $("line").setAttribute("aria-pressed", lineMode);
-  document.body.classList.toggle("line", lineMode);
+  $("line").setAttribute("aria-pressed", lineMode === "delete");
+  $("insert").setAttribute("aria-pressed", lineMode === "insert");
+  document.body.classList.toggle("line", !!lineMode);
+  document.body.classList.toggle("line-del", lineMode === "delete");
+  document.body.classList.toggle("line-ins", lineMode === "insert");
   document.body.classList.toggle("stamp", !!stamp);
   for (const b of $("colors").children) b.setAttribute("aria-pressed", !lineMode && !stamp && b.dataset.c === color);
   for (const b of $("minos").children) b.setAttribute("aria-pressed", !!stamp && b.dataset.p === stamp.piece);
-  $("status").textContent = lineMode ? "消す行をクリック"
+  $("status").textContent = lineMode === "delete" ? "消す行をクリック"
+    : lineMode === "insert" ? "空の行を入れる位置をクリック (その行から上が 1 段上がる)"
     : stamp ? `${stamp.piece} ミノを貼り付け (R / 右クリックで回転)`
     : count > 1 ? `${count} 個を選択中` : `Box ${state.boxes.length} 個`;
   $("zoom").textContent = Math.round(zoom * 100) + "%";
@@ -641,6 +653,13 @@ function removeBoxes(ids, fresh) {
 function deleteRow(b, row) {
   b.cells = "_".repeat(SIZE) + b.cells.slice(0, row * SIZE) + b.cells.slice((row + 1) * SIZE);
 }
+// row 行目 (0 が最上段) に空の行を入れ、その行から上を 1 段ずつ押し上げる。
+// 一番上の行が空いていないと中身がはみ出すので、入れずに false を返す
+function insertRow(b, row) {
+  if (b.cells.slice(0, SIZE) !== "_".repeat(SIZE)) return false;
+  b.cells = b.cells.slice(SIZE, (row + 1) * SIZE) + "_".repeat(SIZE) + b.cells.slice((row + 1) * SIZE);
+  return true;
+}
 function deleteFullRows() {
   for (const b of selBoxes())
     for (let y = 0; y < SIZE; y++)
@@ -708,7 +727,12 @@ board.addEventListener("pointerdown", e => {
     e.preventDefault();
     const i = Number(cell.dataset.i);
     if (lineMode) {
-      deleteRow(b, Math.floor(i / SIZE));
+      const row = Math.floor(i / SIZE);
+      if (lineMode === "delete") deleteRow(b, row);
+      else if (!insertRow(b, row)) {
+        $("status").textContent = "一番上の行が空いていないので挿入できません";
+        return;
+      }
       commit([b]);
       render();
       return;
@@ -814,7 +838,8 @@ for (const [ch, hex] of COLORS) {
   b.className = "swatch" + (ch === "" ? " erase" : "");
   b.dataset.c = ch;
   b.style.background = hex;
-  b.title = ch === "" ? "消しゴム (E。右クリックでも消せます)" : ch === "X" ? "灰 (お邪魔)" : `${ch} ミノの色で塗る (Shift+${ch})`;
+  b.title = ch === "" ? "消しゴム (E。右クリックでも消せます)" : GRAYS.includes(ch) ? `${GRAY_NAMES[ch]} (G で 3 色を順に切り替え)`
+    : `${ch} ミノの色で塗る (Shift+${ch})`;
   b.setAttribute("aria-label", b.title);
   b.addEventListener("click", () => setPaint(ch));
   $("colors").append(b);
@@ -832,7 +857,14 @@ for (const piece of Object.keys(MINOS)) {
 }
 $("undo").addEventListener("click", () => step(-1));
 $("redo").addEventListener("click", () => step(1));
-$("line").addEventListener("click", () => { lineMode = !lineMode; stamp = null; clearGhost(); updateBar(); });
+function toggleLineMode(mode) {
+  lineMode = lineMode === mode ? null : mode;
+  stamp = null;
+  clearGhost();
+  updateBar();
+}
+$("line").addEventListener("click", () => toggleLineMode("delete"));
+$("insert").addEventListener("click", () => toggleLineMode("insert"));
 $("full").addEventListener("click", deleteFullRows);
 $("clear").addEventListener("click", clearSelected);
 $("add").addEventListener("click", () => addBox(...viewCenter()));
@@ -887,7 +919,7 @@ function parseBoxes(text) {
     const tab = line.lastIndexOf("\t");
     const title = tab < 0 ? "" : line.slice(0, tab).trim(), field = (tab < 0 ? line : line.slice(tab + 1)).trim();
     const rows = field.toUpperCase().split("/");
-    if (!rows.every(r => r.length === SIZE && /^[IOTSZJLX_]+$/.test(r))) return null;
+    if (!rows.every(r => r.length === SIZE && /^[IOTSZJLWXK_]+$/.test(r))) return null;
     const kept = rows.slice(-SIZE);  // 高すぎる場合は下の 10 段だけ
     out.push({title, cells: "_".repeat(SIZE * (SIZE - kept.length)) + kept.join("")});
   }
@@ -961,8 +993,10 @@ window.addEventListener("keydown", e => {
   else if (key.length === 1 && "ioszjlt".includes(key)) e.shiftKey ? setPaint(key.toUpperCase()) : setStamp(key.toUpperCase());
   else if (key === "e") setPaint("");
   else if (key === "r") rotateStamp(e.shiftKey ? -1 : 1);
-  else if (key === "x") $("line").click();
-  else if (key === "escape") { lineMode = false; stamp = null; clearGhost(); updateBar(); }
+  else if (key === "x") toggleLineMode(e.shiftKey ? "insert" : "delete");
+  // G: 灰を選ぶ。灰を選んでいるときは 薄い灰 → 灰 → 濃い灰 の順に切り替える
+  else if (key === "g") setPaint(!stamp && !lineMode && GRAYS.includes(color) ? GRAYS[(GRAYS.indexOf(color) + 1) % 3] : "X");
+  else if (key === "escape") { lineMode = null; stamp = null; clearGhost(); updateBar(); }
 });
 
 load();
