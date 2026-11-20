@@ -42,7 +42,9 @@
   .cell { width: 22px; height: 22px; background: var(--cell); }
   /* ライン消去モード: 消す行を強調する */
   body.line .grid { cursor: pointer; }
-  body.line .row:hover .cell { box-shadow: inset 0 0 0 2px var(--danger); opacity: .75; }
+  body.line .box.sel .row:hover .cell { box-shadow: inset 0 0 0 2px var(--danger); opacity: .75; }
+  /* 選択していない Box のマスは、クリックで選択するだけ */
+  .box:not(.sel) .grid, body.line .box:not(.sel) .grid, body.stamp .box:not(.sel) .grid { cursor: pointer; }
 
   /* 下部のアクションバー */
   #bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100vw - 24px);
@@ -70,6 +72,24 @@
              background: color-mix(in srgb, var(--accent) 14%, transparent); }
   #status { color: var(--sub); font-size: 12px; min-width: 9em; text-align: center; }
   input[type=file] { display: none; }
+
+  /* 右上のショートカット確認ボタンと、その一覧のポップアップ */
+  #help-open { position: fixed; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 50%;
+               font: 600 16px/1 system-ui, sans-serif; color: var(--sub); background: var(--bar); backdrop-filter: blur(8px);
+               border: 1px solid var(--line); box-shadow: 0 2px 8px #0002; cursor: pointer; }
+  #help-open:hover { color: var(--accent); border-color: var(--accent); }
+  #help { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 20px 22px; color: var(--text);
+          background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 40px #0005; }
+  #help::backdrop { background: #0006; }
+  #help header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  #help h2 { font-size: 17px; margin: 0; }
+  #help h3 { font-size: 13px; color: var(--sub); margin: 16px 0 6px; }
+  #help header button { font: 20px/1 system-ui, sans-serif; color: var(--sub); background: none; border: 0; cursor: pointer; padding: 4px; }
+  #help table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  #help td { padding: 5px 0; border-top: 1px solid var(--line); vertical-align: top; }
+  #help td:first-child { width: 46%; padding-right: 12px; }
+  #help kbd { display: inline-block; min-width: 1.6em; text-align: center; font: 600 12px/1.5 ui-monospace, Menlo, monospace;
+              padding: 0 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: var(--cell); }
 </style>
 </head>
 <body>
@@ -77,12 +97,45 @@
   <div id="sizer"><div id="board"><div id="hint"></div></div></div>
 </div>
 
+<button id="help-open" title="ショートカット一覧 (?)" aria-label="ショートカット一覧">?</button>
+<dialog id="help" aria-labelledby="help-title">
+  <header><h2 id="help-title">ショートカット</h2><button id="help-close" aria-label="閉じる">×</button></header>
+  <h3>キーボード</h3>
+  <table>
+    <tr><td><kbd>I</kbd> <kbd>O</kbd> <kbd>S</kbd> <kbd>Z</kbd> <kbd>J</kbd> <kbd>L</kbd> <kbd>T</kbd></td><td>そのミノを貼り付けるモード</td></tr>
+    <tr><td><kbd>Shift</kbd> + ミノのキー</td><td>そのミノの色で塗るモード</td></tr>
+    <tr><td><kbd>E</kbd></td><td>消しゴム</td></tr>
+    <tr><td><kbd>R</kbd> / <kbd>Shift</kbd> + <kbd>R</kbd></td><td>貼り付けるミノを右 / 左に回転</td></tr>
+    <tr><td><kbd>X</kbd></td><td>ライン消去モードの切り替え</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>貼り付け・ライン消去モードを抜ける</td></tr>
+    <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>選択中の Box を削除</td></tr>
+    <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>Z</kbd></td><td>選択中の Box の変更を元に戻す (履歴は Box ごと)。何も選択していなければ、削除した Box を戻す</td></tr>
+    <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd> / <kbd>Ctrl/⌘</kbd> + <kbd>Y</kbd></td><td>選択中の Box の変更をやり直す。何も選択していなければ、戻した Box をもう一度削除</td></tr>
+    <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>A</kbd></td><td>すべての Box を選択</td></tr>
+    <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>D</kbd></td><td>選択中の Box を複製</td></tr>
+    <tr><td><kbd>Ctrl/⌘</kbd> + <kbd>C</kbd> → <kbd>V</kbd></td><td>選択中の Box をコピー&ペースト (可視化ページでコピーした盤面も貼れる)</td></tr>
+    <tr><td><kbd>?</kbd></td><td>この一覧を開く</td></tr>
+  </table>
+  <h3>マウス</h3>
+  <table>
+    <tr><td>選択していない Box をクリック</td><td>選択する (塗る・置く・消すのは次のクリックから)</td></tr>
+    <tr><td>マスを左ドラッグ / 右ドラッグ</td><td>選んだ色で塗る / 消す</td></tr>
+    <tr><td>貼り付けモードで左クリック / 右クリック</td><td>ミノを置く / 回転</td></tr>
+    <tr><td>Box の上端 (⠿) をドラッグ</td><td>移動 (選択中の Box はまとめて動く)</td></tr>
+    <tr><td>空いた場所をドラッグ</td><td>範囲選択 (<kbd>Shift</kbd> / <kbd>⌘</kbd> を押しながらで追加)</td></tr>
+    <tr><td><kbd>Shift</kbd> / <kbd>⌘</kbd> + クリック</td><td>Box を選択に追加・解除</td></tr>
+    <tr><td>空いた場所をダブルクリック</td><td>Box を追加</td></tr>
+    <tr><td>中ボタンでドラッグ</td><td>視点を動かす</td></tr>
+    <tr><td><kbd>Ctrl/⌘</kbd> + スクロール / ピンチ</td><td>拡大縮小</td></tr>
+  </table>
+</dialog>
+
 <div id="bar" role="toolbar" aria-label="アクションバー">
   <div class="group" id="colors" aria-label="色"></div>
   <div class="group" id="minos" aria-label="ミノを貼り付け"></div>
   <div class="group">
-    <button id="undo" title="元に戻す (Ctrl/⌘+Z)">↶ Undo</button>
-    <button id="redo" title="やり直す (Ctrl/⌘+Shift+Z)">↷ Redo</button>
+    <button id="undo" title="選択中の Box の変更を元に戻す (Ctrl/⌘+Z)。履歴は Box ごと。未選択なら削除した Box を戻す">↶ Undo</button>
+    <button id="redo" title="選択中の Box の変更をやり直す (Ctrl/⌘+Shift+Z)。履歴は Box ごと">↷ Redo</button>
   </div>
   <div class="group">
     <button id="line" class="danger" aria-pressed="false" title="クリックした行を消して上を 1 段落とす (X)">ライン消去</button>
@@ -158,7 +211,7 @@ function clearGhost() {
 function showGhost() {
   clearGhost();
   const b = stamp && hover && boxById(hover.id);
-  if (!b) return;
+  if (!b || !selected.has(b.id)) return;  // 貼り付けられるのは選択中の Box だけ
   const els = board.querySelector(`.box[data-id="${b.id}"]`).querySelectorAll(".cell");
   const {cells, ok} = stampCells(b, hover.i);
   for (const i of cells) {
@@ -187,27 +240,71 @@ function setPaint(ch) {
   clearGhost();
   updateBar();
 }
-let history = [], cursor = -1, pointer = null;
+let pointer = null;
 
 const emptyCells = () => "_".repeat(SIZE * SIZE);
 const boxById = id => state.boxes.find(b => b.id === id);
 const selBoxes = () => state.boxes.filter(b => selected.has(b.id));
 
 // ---- 履歴と保存 ----
-function commit() {
-  const snapshot = JSON.stringify(state);
-  if (snapshot === history[cursor]) return;
-  history = history.slice(0, cursor + 1);
-  history.push(snapshot);
-  if (history.length > MAX_HISTORY) history.shift();
-  cursor = history.length - 1;
+// 履歴は Box ごとに持つ (中身 = マスとメモ)。Undo / Redo は選択中の Box それぞれの履歴を 1 つ戻す / 進める。
+// Box の追加・削除・移動はどの Box の履歴にも入らない。histories: Box の id -> {stack: [中身の JSON], cursor}
+const histories = new Map();
+const contentOf = b => JSON.stringify({cells: b.cells, title: b.title || ""});
+// 履歴の起点として今の中身を覚える (Box を置いたとき・読み込んだときに呼ぶ)
+function track(b) {
+  histories.set(b.id, {stack: [contentOf(b)], cursor: 0});
+}
+// 中身を変えた Box (boxes) の履歴に今の状態を積み、保存する。Box の追加や移動では boxes を渡さない
+function commit(boxes = []) {
+  for (const b of boxes) {
+    if (!histories.has(b.id)) track(b);
+    const h = histories.get(b.id), snapshot = contentOf(b);
+    if (snapshot === h.stack[h.cursor]) continue;
+    h.stack = h.stack.slice(0, h.cursor + 1);
+    h.stack.push(snapshot);
+    if (h.stack.length > MAX_HISTORY) h.stack.shift();
+    h.cursor = h.stack.length - 1;
+  }
   save();
   updateBar();
 }
-function restore(i) {
-  cursor = i;
-  state = JSON.parse(history[cursor]);
-  selected = new Set(selBoxes().map(b => b.id));
+const canStep = (b, dir) => {
+  const h = histories.get(b.id);
+  return !!h && h.cursor + dir >= 0 && h.cursor + dir < h.stack.length;
+};
+// 削除した Box。未選択のときの Undo で新しいものから復元し、Redo でもう一度削除する。
+// 1 回の削除 = 1 項目 [{box, index (state.boxes での位置), history}]
+let trash = [], restored = [];
+function restoreDeleted() {
+  const items = trash.pop();
+  if (!items) return;
+  for (const {box, index, history} of items) {
+    state.boxes.splice(Math.min(index, state.boxes.length), 0, box);
+    histories.set(box.id, history);
+  }
+  restored.push(items);
+  save();
+  render();
+}
+function deleteAgain() {
+  const items = restored.pop();
+  if (!items) return;
+  removeBoxes(new Set(items.map(it => it.box.id)), false);
+}
+// 選択中の Box それぞれの履歴を dir (-1: Undo, +1: Redo) だけ動かす。未選択なら削除した Box の復元 / 再削除
+function step(dir) {
+  if (!selected.size) {
+    dir < 0 ? restoreDeleted() : deleteAgain();
+    return;
+  }
+  const bs = selBoxes().filter(b => canStep(b, dir));
+  if (!bs.length) return;
+  for (const b of bs) {
+    const h = histories.get(b.id);
+    h.cursor += dir;
+    Object.assign(b, JSON.parse(h.stack[h.cursor]));
+  }
   save();
   render();
 }
@@ -270,8 +367,8 @@ function render() {
 }
 function updateBar() {
   const count = selBoxes().length, has = count > 0;
-  $("undo").disabled = cursor <= 0;
-  $("redo").disabled = cursor >= history.length - 1;
+  $("undo").disabled = has ? !selBoxes().some(b => canStep(b, -1)) : !trash.length;
+  $("redo").disabled = has ? !selBoxes().some(b => canStep(b, 1)) : !restored.length;
   for (const id of ["full", "clear", "dup", "del"]) $(id).disabled = !has;
   $("line").setAttribute("aria-pressed", lineMode);
   document.body.classList.toggle("line", lineMode);
@@ -286,6 +383,7 @@ function updateBar() {
 function setSelection(ids) {
   selected = new Set(ids);
   for (const el of board.querySelectorAll(".box")) el.classList.toggle("sel", selected.has(Number(el.dataset.id)));
+  showGhost();
   updateBar();
 }
 
@@ -322,6 +420,7 @@ function addBoxes(items) {
     // まったく同じ位置に重ならないよう少しずらす
     while (state.boxes.some(o => o.x === b.x && o.y === b.y)) { b.x += 24; b.y += 24; }
     state.boxes.push(b);
+    track(b);
     added.push(b.id);
   }
   selected = new Set(added);
@@ -345,8 +444,19 @@ function duplicate() {
   copyBoxes(bs, Math.max(...xs) - Math.min(...xs) + 276, 0);
 }
 function removeSelected() {
-  if (!selBoxes().length) return;
-  state.boxes = state.boxes.filter(b => !selected.has(b.id));
+  if (selBoxes().length) removeBoxes(selected, true);
+}
+// ids の Box を削除する。削除した Box は (履歴ごと) trash に入れ、未選択のときの Undo で戻せる。
+// fresh は新しい削除か (Redo による再削除でないか)。新しい削除をしたら Redo できる復元はなくなる
+function removeBoxes(ids, fresh) {
+  const items = [];
+  state.boxes.forEach((box, index) => { if (ids.has(box.id)) items.push({box, index, history: histories.get(box.id)}); });
+  if (!items.length) return;
+  state.boxes = state.boxes.filter(b => !ids.has(b.id));
+  for (const id of ids) histories.delete(id);
+  trash.push(items);
+  if (trash.length > MAX_HISTORY) trash.shift();
+  if (fresh) restored = [];
   selected = new Set();
   commit();
   render();
@@ -359,12 +469,12 @@ function deleteFullRows() {
   for (const b of selBoxes())
     for (let y = 0; y < SIZE; y++)
       if (!b.cells.slice(y * SIZE, (y + 1) * SIZE).includes("_")) deleteRow(b, y);
-  commit();
+  commit(selBoxes());
   render();
 }
 function clearSelected() {
   for (const b of selBoxes()) b.cells = emptyCells();
-  commit();
+  commit(selBoxes());
   render();
 }
 
@@ -409,15 +519,21 @@ board.addEventListener("pointerdown", e => {
     setSelection(ids);
     return;
   }
+  const cell = e.target.closest(".cell");
+  // 選択していない Box のマスをクリックしたら、選択するだけ (塗る・置く・消すのは次のクリックから)
+  if (cell && !selected.has(b.id)) {
+    e.preventDefault();
+    setSelection([b.id]);
+    return;
+  }
   // 複数選択中の Box を触ったときは選択を保つ (まとめて動かせるように)
   if (!selected.has(b.id)) setSelection([b.id]);
-  const cell = e.target.closest(".cell");
   if (cell) {
     e.preventDefault();
     const i = Number(cell.dataset.i);
     if (lineMode) {
       deleteRow(b, Math.floor(i / SIZE));
-      commit();
+      commit([b]);
       render();
       return;
     }
@@ -427,7 +543,7 @@ board.addEventListener("pointerdown", e => {
       const {cells, ok} = stampCells(b, i);
       if (!ok) return;
       for (const k of cells) b.cells = b.cells.slice(0, k) + stamp.piece + b.cells.slice(k + 1);
-      commit();
+      commit([b]);
       render();
       return;
     }
@@ -490,7 +606,7 @@ window.addEventListener("pointerup", () => {
     commit();
     render();
   } else if (d.type === "paint") {
-    commit();
+    commit([d.box]);
   } else if (d.type === "marquee") {
     d.el.remove();
   } else {
@@ -511,8 +627,9 @@ board.addEventListener("dblclick", e => {
 });
 board.addEventListener("change", e => {
   if (e.target.tagName !== "INPUT") return;
-  boxById(Number(e.target.closest(".box").dataset.id)).title = e.target.value;
-  commit();
+  const b = boxById(Number(e.target.closest(".box").dataset.id));
+  b.title = e.target.value;
+  commit([b]);
 });
 
 // ---- アクションバー ----
@@ -521,7 +638,7 @@ for (const [ch, hex] of COLORS) {
   b.className = "swatch" + (ch === "" ? " erase" : "");
   b.dataset.c = ch;
   b.style.background = hex;
-  b.title = ch === "" ? "消しゴム (右クリックでも消せます)" : ch === "X" ? "灰 (お邪魔)" : `${ch} ミノの色で塗る (Shift+${ch})`;
+  b.title = ch === "" ? "消しゴム (E。右クリックでも消せます)" : ch === "X" ? "灰 (お邪魔)" : `${ch} ミノの色で塗る (Shift+${ch})`;
   b.setAttribute("aria-label", b.title);
   b.addEventListener("click", () => setPaint(ch));
   $("colors").append(b);
@@ -537,8 +654,8 @@ for (const piece of Object.keys(MINOS)) {
   b.addEventListener("click", () => setStamp(piece));
   $("minos").append(b);
 }
-$("undo").addEventListener("click", () => cursor > 0 && restore(cursor - 1));
-$("redo").addEventListener("click", () => cursor < history.length - 1 && restore(cursor + 1));
+$("undo").addEventListener("click", () => step(-1));
+$("redo").addEventListener("click", () => step(1));
 $("line").addEventListener("click", () => { lineMode = !lineMode; stamp = null; clearGhost(); updateBar(); });
 $("full").addEventListener("click", deleteFullRows);
 $("clear").addEventListener("click", clearSelected);
@@ -562,6 +679,10 @@ $("file").addEventListener("change", async e => {
     const data = JSON.parse(await file.text());
     if (!valid(data)) throw new Error("形式が違います");
     state = {boxes: data.boxes, nextId: Math.max(0, ...data.boxes.map(b => b.id || 0)) + 1};
+    histories.clear();
+    trash = [];
+    restored = [];
+    for (const b of state.boxes) track(b);
     selected = new Set();
     commit();
     render();
@@ -636,11 +757,23 @@ document.addEventListener("paste", e => {
 });
 
 // ---- キーボード ----
+// ---- ショートカット一覧 ----
+const help = $("help");
+$("help-open").addEventListener("click", () => help.showModal());
+$("help-close").addEventListener("click", () => help.close());
+// 枠の外 (背景) のクリックで閉じる。背景のクリックも target は dialog 自身なので、位置で見分ける
+help.addEventListener("click", e => {
+  const r = help.getBoundingClientRect();
+  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) help.close();
+});
+
 window.addEventListener("keydown", e => {
+  if (help.open) return;  // 一覧を開いている間はボードを操作しない (Esc で閉じる)
   if (e.target.tagName === "INPUT") {
     if (e.key === "Enter" || e.key === "Escape") e.target.blur();
     return;
   }
+  if (e.key === "?") { e.preventDefault(); help.showModal(); return; }
   const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
   if (mod && key === "z") { e.preventDefault(); $(e.shiftKey ? "redo" : "undo").click(); }
   else if (mod && key === "y") { e.preventDefault(); $("redo").click(); }
@@ -650,13 +783,14 @@ window.addEventListener("keydown", e => {
   else if (key === "delete" || key === "backspace") removeSelected();
   // ミノのキー: そのまま押すと貼り付け、Shift を押しながらだとその色で塗る
   else if (key.length === 1 && "ioszjlt".includes(key)) e.shiftKey ? setPaint(key.toUpperCase()) : setStamp(key.toUpperCase());
+  else if (key === "e") setPaint("");
   else if (key === "r") rotateStamp(e.shiftKey ? -1 : 1);
   else if (key === "x") $("line").click();
   else if (key === "escape") { lineMode = false; stamp = null; clearGhost(); updateBar(); }
 });
 
 load();
-commit();
+for (const b of state.boxes) track(b);
 render();
 setZoom(1);
 </script>
