@@ -3,7 +3,7 @@
 開始形状に 6 ミノ (I J L S Z O) を来た順にホールドなしで置き、最後に来た T で TSD (または TSS) を打つ。
 720 通りのミノ順すべてについて、T スピンを打てる最終形を求める。05, 06, 10 で共有する。
 
-- lines = 2 なら TSD、lines = 1 なら TSS (どちらも Mini は除き、ちょうどその段数だけ消えるもの)
+- lines = 1 / 2 / 3 で TSS / TSD / TST (どれも Mini は除き、ちょうどその段数だけ消えるもの)
 - 重い盤面探索は C++ (lib/spin_search.cpp、初回実行時に build/ へ自動ビルド)。ミノ割りの列挙と
   ミノ順ごとの検証は Python で行い、両者の結果が一致することを確かめている
 - T を置く前の高さは max_height 段以下に制限する (制限なしでは組み合わせ爆発する)
@@ -65,14 +65,14 @@ def parse_board(field: str) -> int:
     return board
 
 
-# 消す段数 -> T を置く前に消す段の中で埋まっている必要があるマス数 (TSD は 20 - 4、TSS は 10 - 3)
-NEED = {2: 2 * W - 4, 1: W - 3}
-SPIN = {2: "TSD", 1: "TSS"}
+# 消す段数 -> T を置く前に消す段の中で埋まっている必要があるマス数 (TSS は 10 - 3、TSD は 20 - 4、TST は 30 - 4)
+NEED = {1: W - 3, 2: 2 * W - 4, 3: 3 * W - 4}
+SPIN = {1: "TSS", 2: "TSD", 3: "TST"}
 
 
 def rows_label(row: int, lines: int) -> str:
-    """消す段の表記 (1 始まり)。TSD は "1-2"、TSS は "1"。"""
-    return "-".join(str(row + 1 + i) for i in range(lines))
+    """消す段の表記 (1 始まり)。TSS は "1"、TSD は "1-2"、TST は "1-3"。"""
+    return f"{row + 1}-{row + lines}" if lines > 1 else str(row + 1)
 
 
 def silhouettes(start: int, row: int, max_height: int, lines: int = 2) -> list[tuple[int, int, int, int]]:
@@ -212,7 +212,7 @@ def solve(task: tuple[str, str, int, int, int]) -> list[dict]:
 
 
 # CSV で消す段を書く列の名前 (05, 06 の CSV との互換のため TSD は tsd_rows)
-ROWS_COLUMN = {2: "tsd_rows", 1: "tss_rows"}
+ROWS_COLUMN = {1: "tss_rows", 2: "tsd_rows", 3: "tst_rows"}
 
 
 def run(
@@ -283,7 +283,7 @@ def load_patterns(csv_path: Path) -> dict[str, dict]:
             {
                 "id": r["silhouette"],
                 "start": r["start"],
-                "rows": r["tsd_rows"] if "tsd_rows" in r else r["tss_rows"],
+                "rows": next(r[c] for c in ROWS_COLUMN.values() if c in r),
                 # T を置く前に埋まっているマス (ミノの区別なし)
                 "cells": "/".join("".join("_" if c in "_T" else "X" for c in line) for line in r["field"].split("/")),
                 "tilings": [],

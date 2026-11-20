@@ -30,12 +30,14 @@ jobs:
           site.mkdir()
           items = []
           for d in sorted(p for p in Path(".").iterdir() if p.is_dir() and re.fullmatch(r"\d+", p.name)):
-              for f in sorted(d.glob("*.html")):
-                  (site / d.name).mkdir(exist_ok=True)
-                  shutil.copy2(f, site / d.name / f.name)
+              # 11/LJ/ のようなサブディレクトリの HTML も集める
+              for f in sorted(d.rglob("*.html")):
+                  rel = f.relative_to(".")
+                  (site / rel.parent).mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(f, site / rel)
                   m = re.search(r"<title>(.*?)</title>", f.read_text(encoding="utf-8"), re.S)
                   title = m.group(1).strip() if m else f.name
-                  items.append((f"{d.name}/{f.name}", d.name, title))
+                  items.append((rel.as_posix(), rel.parent.as_posix(), title))
 
           rows = "\n".join(
               f'<li><span class="num">{n}</span><a href="{html.escape(href)}">{t}</a></li>'

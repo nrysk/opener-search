@@ -24,7 +24,8 @@ using u128 = unsigned __int128;
 using Orders = std::bitset<720>;
 
 constexpr int W = 10;
-constexpr int H = 12;  // 盤面の高さ (積みは高々 6 段なので、出現位置と回転の余白を含めても足りる)
+constexpr int H = 12;  // 盤面の高さ (積みは高々 8 段。その上に出現位置と回転の余白がある)
+constexpr int MAX_HEIGHT_LIMIT = 8;
 constexpr int XOFF = 2, YOFF = 2;
 constexpr int NX = W + XOFF, NY = H + YOFF;
 constexpr int NSTATE = 4 * NX * NY;
@@ -217,6 +218,13 @@ bool find_tspin(const Piece& t, u128 board, u128 target, int need, std::vector<c
     return false;
 }
 
+struct BoardHash {
+    size_t operator()(u128 b) const {
+        uint64_t lo = (uint64_t)b, hi = (uint64_t)(b >> 64);
+        return std::hash<uint64_t>{}(lo ^ (hi * 0x9e3779b97f4a7c15ULL));
+    }
+};
+
 u128 parse_hex(const char* s) {
     u128 v = 0;
     for (; *s; s++) v = v * 16 + (*s <= '9' ? *s - '0' : (*s | 32) - 'a' + 10);
@@ -237,12 +245,12 @@ int main(int argc, char** argv) {
     }
     u128 start = parse_hex(argv[1]);
     int row = std::atoi(argv[2]), lines = std::atoi(argv[3]), max_height = std::atoi(argv[4]);
-    if (max_height > 6) {
-        std::fprintf(stderr, "max_height は 6 以下 (盤面を 64 ビットのキーにするため)\n");
+    if (max_height > MAX_HEIGHT_LIMIT) {
+        std::fprintf(stderr, "max_height は %d 以下\n", MAX_HEIGHT_LIMIT);
         return 2;
     }
-    // T を置く前に消す段の中で埋まっている必要があるマス数 (TSD は 20 - 4、TSS は 10 - 3)
-    int need = lines == 2 ? 2 * W - 4 : W - 3;
+    // T を置く前に消す段の中で埋まっている必要があるマス数 (TSS は 10 - 3、TSD は 20 - 4、TST は 30 - 4)
+    int need = lines * W - (lines == 1 ? 3 : 4);
     u128 target = 0;
     for (int i = 0; i < lines; i++) target |= row_mask(row + i);
     int max_outside = popcount(start) + 24 - need;  // 消す段の外に置けるブロック数の上限
@@ -253,11 +261,11 @@ int main(int argc, char** argv) {
     Piece tpiece('T');
     std::vector<char> seen(NSTATE);
 
-    // layer[used] = 盤面 -> ミノ順集合 (盤面は max_height 段以下なので 64 ビットに収まる)
-    std::vector<std::unordered_map<uint64_t, Orders>> layer(64), next(64);
+    // layer[used] = 盤面 -> ミノ順集合
+    std::vector<std::unordered_map<u128, Orders, BoardHash>> layer(64), next(64);
     Orders one;
     one.set(0);
-    layer[0][(uint64_t)start] = one;
+    layer[0][start] = one;
     for (int k = 0; k < 6; k++) {
         for (auto& m : next) m.clear();
         for (int used = 0; used < 64; used++) {
@@ -279,7 +287,7 @@ int main(int argc, char** argv) {
                         for (int y = 0; y < max_height; y++)
                             if ((nb & row_mask(y)) == row_mask(y)) { full = true; break; }
                         if (full) continue;
-                        dst[(uint64_t)nb] |= shifted;
+                        dst[nb] |= shifted;
                     }
                 }
             }

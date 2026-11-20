@@ -40,6 +40,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   .tabs button[aria-selected="true"] { color: var(--accent); border-color: var(--accent); }
   .tabs small { display: block; font-size: 10px; font-weight: 400; line-height: 1.3; margin-top: 2px; }
   .tabs svg { display: block; width: 66px; height: auto; margin: 4px auto 0; }
+  .tabs .tab-boards { display: flex; gap: 4px; }
   .summary { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-start; margin-bottom: 16px; }
   .stats { display: flex; flex-wrap: wrap; gap: 8px; }
   .stat { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; }
@@ -188,6 +189,8 @@ const merge = (dst, src, off = 0) => {
   for (let i = 0; i < src.length; i++) if (src[i] && (!dst[off + i] || src[i] < dst[off + i])) dst[off + i] = src[i];
 };
 const isEmpty = field => !/[^_\/]/.test(field);
+// グループの開始形状 [[名前, 形], ...]。starts があれば (いくつかの開始形状をまとめたタブ) それを使う
+const startsOf = g => g.starts || g.l.map((l, k) => [l, g.f[k]]);
 const byId = new Map();
 for (const gid of Object.keys(DATA)) {
   const g = DATA[gid];
@@ -435,8 +438,8 @@ function draw() {
   }
   const covered = count(union, maxSoft);
   $("stats").innerHTML =
-    labels.map((l, k) => isEmpty(group.f[k]) ? "" :
-      `<div class="stat">${boardSvg(group.f[k], 2)}<span>開始形状 ${l}</span></div>`).join("") + [
+    startsOf(group).map(([l, f]) => isEmpty(f) ? "" :
+      `<div class="stat">${boardSvg(f, 2)}<span>開始形状 ${l}</span></div>`).join("") + [
       [usable.length, labels.length > 1 ? "A・B 共通のシルエット" : "シルエット"],
       [`${covered} / ${total}`, "__SPIN__ を打てるミノ順" + (labels.length > 1 ? ` (A ${n} + B ${n})` : group.first ? ` (${group.first} 始動)` : "")],
       [`${count(union, 0)} / ${total}`, "うちソフトドロップなし"],
@@ -492,7 +495,8 @@ for (const gid of Object.keys(DATA)) {
   b.setAttribute("role", "tab");
   b.dataset.start = gid;
   b.innerHTML = g.l.length > 1 ? `${gid.slice(0, -2)} 共通<small>A・B 同形<br>${g.p.length} 種類</small>` :
-    isEmpty(g.f[0]) ? `${gid}<small>${g.p.length} 種類</small>` : gid + boardSvg(g.f[0], 2);
+    isEmpty(g.f[0]) ? `${gid}<small>${g.p.length} 種類</small>` :
+    gid + `<span class="tab-boards">${startsOf(g).map(([, f]) => boardSvg(f, 2)).join("")}</span>`;
   b.addEventListener("click", () => setStart(gid));
   $("tabs").append(b);
 }
@@ -588,7 +592,13 @@ def encode_orders(orders: dict[str, str], first: str | None = None) -> str:
     return "".join(out)
 
 
-def group(labels: list[str], fields: list[str], members: list[list[dict]], first: str | None = None) -> dict:
+def group(
+    labels: list[str],
+    fields: list[str],
+    members: list[list[dict]],
+    first: str | None = None,
+    starts: list[tuple[str, str]] | None = None,
+) -> dict:
     """タブ 1 つ分のデータ。
 
     labels / fields は開始形状の名前と形 (通常 1 つ。複数の開始形状に共通のシルエットを扱うなら複数)、
@@ -596,9 +606,12 @@ def group(labels: list[str], fields: list[str], members: list[list[dict]], first
     パターンに note があれば、カードの見出しに補足として表示する。
     first (始動ミノ) を指定すると、そのミノで始まる 120 通りのミノ順だけを扱うタブになる
     (members のミノ順はそのミノで始まるものだけにしておく)。
+    starts ([(名前, 形), ...]) を指定すると、いくつかの開始形状のシルエットをまとめた 1 つのタブとして、
+    その開始形状をすべて表示する (どれかから組めればよい、という見方。各パターンの note に開始形状の名前を入れておく)。
     """
     return {
         **({"first": first} if first else {}),
+        **({"starts": [list(s) for s in starts]} if starts else {}),
         "l": labels,
         "f": fields,
         "p": [

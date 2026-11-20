@@ -21,7 +21,39 @@
          font: 14px/1.4 system-ui, -apple-system, "Hiragino Sans", sans-serif; }
 
   /* ボード: スクロールできる広い作業面 */
-  #viewport { position: absolute; inset: 0; overflow: auto; }
+  :root { --side: 184px; }
+  #viewport { position: absolute; inset: 0 0 0 var(--side); overflow: auto; }
+
+  /* 左のサイドバー: タブ (ボード) の切り替え */
+  #side { position: fixed; left: 0; top: 0; bottom: 0; width: var(--side); display: flex; flex-direction: column;
+          background: var(--card); border-right: 1px solid var(--line); z-index: 5; }
+  #side header { display: flex; align-items: center; justify-content: space-between; padding: 8px 6px 4px 14px; }
+  #side h2 { font-size: 12px; font-weight: 600; color: var(--sub); margin: 0; letter-spacing: .04em; }
+  #side-toggle { font: 16px/1 system-ui, sans-serif; color: var(--sub); background: none; border: 1px solid transparent;
+                 border-radius: 6px; width: 28px; height: 28px; cursor: pointer; }
+  #side-toggle:hover { color: var(--accent); border-color: var(--line); }
+  /* 最小化: 開くボタンだけの細い帯にする */
+  body.side-min { --side: 40px; }
+  body.side-min #side h2, body.side-min #tab-list, body.side-min #tab-add { display: none; }
+  body.side-min #side header { justify-content: center; padding: 8px 0 4px; }
+  #tab-list { list-style: none; margin: 0; padding: 0 8px; overflow-y: auto; flex: 1; }
+  #tab-list li { display: flex; align-items: center; border-radius: 6px; margin-bottom: 2px; }
+  #tab-list li:hover { background: var(--cell); }
+  #tab-list li.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  #tab-list .tab { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; font: inherit; color: inherit;
+                   background: none; border: 0; padding: 7px 8px; text-align: left; cursor: pointer; }
+  #tab-list li.active .tab { color: var(--accent); font-weight: 600; }
+  #tab-list .tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #tab-list .tab small { color: var(--sub); font-weight: 400; font-size: 11px; margin-left: auto; }
+  #tab-list input { flex: 1; min-width: 0; font: inherit; color: inherit; background: var(--card); margin: 3px 4px;
+                    border: 1px solid var(--accent); border-radius: 4px; padding: 3px 5px; outline: none; }
+  #tab-list .tab-del { font: 16px/1 system-ui, sans-serif; color: var(--sub); background: none; border: 0; cursor: pointer;
+                       padding: 4px 8px; visibility: hidden; }
+  #tab-list li:hover .tab-del { visibility: visible; }
+  #tab-list .tab-del:hover { color: var(--danger); }
+  #tab-add { font: inherit; color: var(--sub); background: none; border: 1px dashed var(--line); border-radius: 6px;
+             margin: 8px; padding: 7px; cursor: pointer; }
+  #tab-add:hover { color: var(--accent); border-color: var(--accent); }
   #sizer { position: relative; }
   #board { position: absolute; left: 0; top: 0; width: 6000px; height: 4000px; transform-origin: 0 0;
            background-image: radial-gradient(var(--dot) 1px, transparent 1px); background-size: 24px 24px; }
@@ -47,7 +79,8 @@
   .box:not(.sel) .grid, body.line .box:not(.sel) .grid, body.stamp .box:not(.sel) .grid { cursor: pointer; }
 
   /* 下部のアクションバー */
-  #bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100vw - 24px);
+  #bar { position: fixed; left: calc(50% + var(--side) / 2); bottom: 14px; transform: translateX(-50%);
+         max-width: calc(100vw - var(--side) - 24px);
          display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 10px; padding: 8px 12px;
          background: var(--bar); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: 12px;
          box-shadow: 0 4px 18px #0003; }
@@ -93,6 +126,12 @@
 </style>
 </head>
 <body>
+<nav id="side" aria-label="タブ">
+  <header><h2>タブ</h2><button id="side-toggle" aria-expanded="true"></button></header>
+  <ul id="tab-list" role="tablist"></ul>
+  <button id="tab-add" title="新しいタブを追加">＋ タブ</button>
+</nav>
+
 <div id="viewport">
   <div id="sizer"><div id="board"><div id="hint"></div></div></div>
 </div>
@@ -118,6 +157,9 @@
   </table>
   <h3>マウス</h3>
   <table>
+    <tr><td>サイドバーのタブをクリック / ダブルクリック</td><td>タブを切り替える / 名前を変える</td></tr>
+    <tr><td>タブの × / ＋ タブ</td><td>タブを削除 / 追加 (Box のあるタブは確認してから削除)</td></tr>
+    <tr><td>サイドバーの « / »</td><td>サイドバーを最小化 / 開く</td></tr>
     <tr><td>選択していない Box をクリック</td><td>選択する (塗る・置く・消すのは次のクリックから)</td></tr>
     <tr><td>マスを左ドラッグ / 右ドラッグ</td><td>選んだ色で塗る / 消す</td></tr>
     <tr><td>貼り付けモードで左クリック / 右クリック</td><td>ミノを置く / 回転</td></tr>
@@ -148,8 +190,8 @@
     <button id="del" title="選択中の Box を削除 (Delete)">削除</button>
   </div>
   <div class="group">
-    <button id="export" title="ボード全体を JSON ファイルに保存">保存</button>
-    <button id="import" title="JSON ファイルからボードを読み込む">読込</button>
+    <button id="export" title="すべてのタブを JSON ファイルに保存">保存</button>
+    <button id="import" title="JSON ファイルを読み込み、新しいタブとして追加する">読込</button>
     <input type="file" id="file" accept="application/json,.json">
   </div>
   <div class="group">
@@ -159,7 +201,7 @@
 </div>
 
 <script>
-const SIZE = 10, CELL = 23, STORE_KEY = "tki-board-v1", MAX_HISTORY = 300;
+const SIZE = 10, CELL = 23, STORE_KEY = "tki-board-v2", OLD_STORE_KEY = "tki-board-v1", MAX_HISTORY = 300;
 // 色: テトリミノ 7 色 + お邪魔 (灰) + 消しゴム ("")
 const COLORS = [
   ["I", "#35b8d6"], ["O", "#e6b422"], ["T", "#9b4fd0"], ["S", "#4caf50"],
@@ -170,8 +212,9 @@ const $ = id => document.getElementById(id);
 const board = $("board"), viewport = $("viewport"), sizer = $("sizer");
 const BOARD_W = 6000, BOARD_H = 4000, ZOOM_MIN = 0.2, ZOOM_MAX = 2.5;
 
-// state.boxes: [{id, x, y, title, cells}]。cells は 100 文字 (上の段から。"_" は空)
-let state = {boxes: [], nextId: 1};
+// doc: {tabs: [{id, name, boxes}], active: 表示中のタブの id, nextId: 次に使う id (タブと Box で共通の連番)}
+// state は表示中のタブ。state.boxes: [{id, x, y, title, cells}]。cells は 100 文字 (上の段から。"_" は空)
+let doc = null, state = null;
 // selected: 選択中の Box の id (複数選択できる)。clipboard: コピーした Box の一覧
 let selected = new Set(), color = "T", lineMode = false, clipboard = null, zoom = 1;
 // ミノ貼り付けモード: {piece, rot} (null なら色塗り)。hover はポインタのあるマス {id, i}
@@ -273,22 +316,26 @@ const canStep = (b, dir) => {
   const h = histories.get(b.id);
   return !!h && h.cursor + dir >= 0 && h.cursor + dir < h.stack.length;
 };
-// 削除した Box。未選択のときの Undo で新しいものから復元し、Redo でもう一度削除する。
-// 1 回の削除 = 1 項目 [{box, index (state.boxes での位置), history}]
-let trash = [], restored = [];
+// タブごとの、保存しない状態。trash: 削除した Box (未選択のときの Undo で新しいものから復元し、Redo でもう一度削除する。
+// 1 回の削除 = 1 項目 [{box, index (state.boxes での位置), history}])、restored: 復元したもの、view: 表示位置と倍率
+const tabMem = new Map();
+function mem(tab = state) {
+  if (!tabMem.has(tab.id)) tabMem.set(tab.id, {trash: [], restored: [], view: null});
+  return tabMem.get(tab.id);
+}
 function restoreDeleted() {
-  const items = trash.pop();
+  const items = mem().trash.pop();
   if (!items) return;
   for (const {box, index, history} of items) {
     state.boxes.splice(Math.min(index, state.boxes.length), 0, box);
     histories.set(box.id, history);
   }
-  restored.push(items);
+  mem().restored.push(items);
   save();
   render();
 }
 function deleteAgain() {
-  const items = restored.pop();
+  const items = mem().restored.pop();
   if (!items) return;
   removeBoxes(new Set(items.map(it => it.box.id)), false);
 }
@@ -309,18 +356,145 @@ function step(dir) {
   render();
 }
 function save() {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch {}
+  doc.active = state.id;
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(doc)); } catch {}
 }
+const readJSON = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
+// 保存済みのタブを読む。タブ機能より前の保存 (ボード 1 枚) があれば「タブ 1」にする
 function load() {
-  try {
-    const data = JSON.parse(localStorage.getItem(STORE_KEY));
-    if (valid(data)) state = data;
-  } catch {}
+  const data = readJSON(STORE_KEY);
+  if (validDoc(data)) {
+    doc = data;
+  } else {
+    const old = readJSON(OLD_STORE_KEY), boxes = valid(old) ? old.boxes : [];
+    doc = {tabs: [], active: 0, nextId: Math.max(1, ...boxes.map(b => (b.id || 0) + 1))};
+    doc.tabs.push({id: doc.nextId++, name: "タブ 1", boxes});
+  }
+  state = doc.tabs.find(t => t.id === doc.active) || doc.tabs[0];
 }
+// ボード 1 枚分 ({boxes}) の形式か
 function valid(data) {
   return data && Array.isArray(data.boxes) && data.boxes.every(b =>
     typeof b.cells === "string" && b.cells.length === SIZE * SIZE && Number.isFinite(b.x) && Number.isFinite(b.y));
 }
+// タブつきの形式 ({tabs, active, nextId}) か
+function validDoc(data) {
+  return data && Array.isArray(data.tabs) && data.tabs.length > 0 && Number.isFinite(data.nextId) &&
+    data.tabs.every(t => valid(t) && Number.isFinite(t.id) && typeof t.name === "string");
+}
+
+// ---- タブ ----
+function renderTabs() {
+  const list = $("tab-list");
+  list.replaceChildren(...doc.tabs.map(t => {
+    const li = document.createElement("li");
+    li.className = t === state ? "active" : "";
+    li.dataset.tab = t.id;
+    const b = document.createElement("button");
+    b.className = "tab";
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", t === state);
+    b.title = "クリックで切り替え、ダブルクリックで名前を変更";
+    b.innerHTML = `<span></span><small>${t.boxes.length}</small>`;
+    b.firstChild.textContent = t.name;
+    li.append(b);
+    if (doc.tabs.length > 1) {
+      const del = document.createElement("button");
+      del.className = "tab-del";
+      del.textContent = "×";
+      del.title = "このタブを削除";
+      del.setAttribute("aria-label", `${t.name} を削除`);
+      li.append(del);
+    }
+    return li;
+  }));
+}
+function switchTab(id) {
+  const tab = doc.tabs.find(t => t.id === id);
+  if (!tab || tab === state) return;
+  mem().view = {left: viewport.scrollLeft, top: viewport.scrollTop, zoom};
+  state = tab;
+  selected = new Set();
+  save();
+  renderTabs();
+  render();
+  // タブごとに表示位置と倍率を覚えておき、戻ったときに復元する
+  const view = mem().view;
+  setZoom(view ? view.zoom : 1);
+  viewport.scrollLeft = view ? view.left : 0;
+  viewport.scrollTop = view ? view.top : 0;
+}
+function addTab(name, boxes = []) {
+  const tab = {id: doc.nextId++, name, boxes};
+  doc.tabs.push(tab);
+  for (const b of boxes) track(b);
+  return tab;
+}
+function newTabName() {
+  const used = new Set(doc.tabs.map(t => t.name));
+  let n = doc.tabs.length + 1;
+  while (used.has(`タブ ${n}`)) n++;
+  return `タブ ${n}`;
+}
+function deleteTab(id) {
+  const i = doc.tabs.findIndex(t => t.id === id), tab = doc.tabs[i];
+  if (!tab || doc.tabs.length === 1) return;
+  if (tab.boxes.length && !confirm(`「${tab.name}」を削除しますか? (Box ${tab.boxes.length} 個。元に戻せません)`)) return;
+  if (tab === state) switchTab(doc.tabs[i + 1 < doc.tabs.length ? i + 1 : i - 1].id);
+  doc.tabs.splice(i, 1);
+  for (const b of tab.boxes) histories.delete(b.id);
+  tabMem.delete(tab.id);
+  save();
+  renderTabs();
+}
+// タブの名前をその場で編集する (Enter かフォーカスを外すと確定、Esc で取り消し)
+function renameTab(li) {
+  const tab = doc.tabs.find(t => t.id === Number(li.dataset.tab));
+  const input = document.createElement("input");
+  input.value = tab.name;
+  input.setAttribute("aria-label", "タブの名前");
+  li.replaceChildren(input);
+  input.focus();
+  input.select();
+  input.addEventListener("keydown", e => {
+    if (e.key === "Escape") input.dataset.cancel = "1";
+    if (e.key === "Enter" || e.key === "Escape") input.blur();
+  });
+  input.addEventListener("blur", () => {
+    const name = input.value.trim();
+    if (!input.dataset.cancel && name) { tab.name = name; save(); }
+    renderTabs();
+  });
+}
+$("tab-list").addEventListener("click", e => {
+  const li = e.target.closest("li");
+  if (!li || e.target.tagName === "INPUT") return;
+  if (e.target.closest(".tab-del")) deleteTab(Number(li.dataset.tab));
+  else switchTab(Number(li.dataset.tab));
+});
+$("tab-list").addEventListener("dblclick", e => {
+  const li = e.target.closest("li");
+  if (li && e.target.closest(".tab")) renameTab(li);
+});
+// サイドバーの最小化。開いているかどうかはこのブラウザに覚えておく
+const SIDE_KEY = "tki-board-side-min";
+function setSideMin(min) {
+  document.body.classList.toggle("side-min", min);
+  const t = $("side-toggle");
+  t.textContent = min ? "»" : "«";
+  t.title = min ? `サイドバーを開く (今のタブ: ${state.name})` : "サイドバーを最小化";
+  t.setAttribute("aria-label", min ? "サイドバーを開く" : "サイドバーを最小化");
+  t.setAttribute("aria-expanded", !min);
+  try { localStorage.setItem(SIDE_KEY, min ? "1" : ""); } catch {}
+}
+$("side-toggle").addEventListener("click", () => setSideMin(!document.body.classList.contains("side-min")));
+
+$("tab-add").addEventListener("click", () => {
+  const tab = addTab(newTabName());
+  save();
+  switchTab(tab.id);
+  renderTabs();
+});
 
 // ---- 描画 ----
 function paintCell(el, ch) {
@@ -361,14 +535,15 @@ function render() {
   hover = null;
   for (const el of [...board.querySelectorAll(".box")]) el.remove();
   for (const b of state.boxes) board.append(boxElement(b));
+  renderTabs();
   $("hint").textContent = state.boxes.length ? "" :
     "下の「＋ Box」か、ボードのダブルクリックで 10x10 の Box を置けます";
   updateBar();
 }
 function updateBar() {
   const count = selBoxes().length, has = count > 0;
-  $("undo").disabled = has ? !selBoxes().some(b => canStep(b, -1)) : !trash.length;
-  $("redo").disabled = has ? !selBoxes().some(b => canStep(b, 1)) : !restored.length;
+  $("undo").disabled = has ? !selBoxes().some(b => canStep(b, -1)) : !mem().trash.length;
+  $("redo").disabled = has ? !selBoxes().some(b => canStep(b, 1)) : !mem().restored.length;
   for (const id of ["full", "clear", "dup", "del"]) $(id).disabled = !has;
   $("line").setAttribute("aria-pressed", lineMode);
   document.body.classList.toggle("line", lineMode);
@@ -415,7 +590,7 @@ const snap = v => Math.max(0, Math.round(v / 12) * 12);
 function addBoxes(items) {
   const added = [];
   for (const {x, y, source} of items) {
-    const b = {id: state.nextId++, x: snap(x), y: snap(y),
+    const b = {id: doc.nextId++, x: snap(x), y: snap(y),
                title: source ? source.title : "", cells: source ? source.cells : emptyCells()};
     // まったく同じ位置に重ならないよう少しずらす
     while (state.boxes.some(o => o.x === b.x && o.y === b.y)) { b.x += 24; b.y += 24; }
@@ -454,9 +629,10 @@ function removeBoxes(ids, fresh) {
   if (!items.length) return;
   state.boxes = state.boxes.filter(b => !ids.has(b.id));
   for (const id of ids) histories.delete(id);
-  trash.push(items);
-  if (trash.length > MAX_HISTORY) trash.shift();
-  if (fresh) restored = [];
+  const m = mem();
+  m.trash.push(items);
+  if (m.trash.length > MAX_HISTORY) m.trash.shift();
+  if (fresh) m.restored = [];
   selected = new Set();
   commit();
   render();
@@ -665,7 +841,7 @@ $("del").addEventListener("click", removeSelected);
 $("zoom").addEventListener("click", () => setZoom(1));
 $("export").addEventListener("click", () => {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 1)], {type: "application/json"}));
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 1)], {type: "application/json"}));
   a.download = "board.json";
   a.click();
   URL.revokeObjectURL(a.href);
@@ -677,15 +853,15 @@ $("file").addEventListener("change", async e => {
   if (!file) return;
   try {
     const data = JSON.parse(await file.text());
-    if (!valid(data)) throw new Error("形式が違います");
-    state = {boxes: data.boxes, nextId: Math.max(0, ...data.boxes.map(b => b.id || 0)) + 1};
-    histories.clear();
-    trash = [];
-    restored = [];
-    for (const b of state.boxes) track(b);
-    selected = new Set();
-    commit();
-    render();
+    // タブつきの保存ならすべてのタブを、ボード 1 枚の保存ならファイル名のタブを、新しいタブとして追加する
+    const sources = validDoc(data) ? data.tabs : valid(data) ? [{name: file.name.replace(/\.json$/i, ""), boxes: data.boxes}] : null;
+    if (!sources) throw new Error("形式が違います");
+    // id は今のボードと重ならないよう振り直す
+    const added = sources.map(t => addTab(t.name, t.boxes.map(b => ({...b, id: doc.nextId++}))));
+    save();
+    switchTab(added[0].id);
+    renderTabs();
+    $("status").textContent = `${added.length} 個のタブを読み込みました`;
   } catch (err) {
     $("status").textContent = "読み込めませんでした";
   }
@@ -790,7 +966,11 @@ window.addEventListener("keydown", e => {
 });
 
 load();
-for (const b of state.boxes) track(b);
+for (const t of doc.tabs) for (const b of t.boxes) track(b);
+let sideMin = false;
+try { sideMin = localStorage.getItem(SIDE_KEY) === "1"; } catch {}
+setSideMin(sideMin);
+renderTabs();
 render();
 setZoom(1);
 </script>

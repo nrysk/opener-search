@@ -210,6 +210,11 @@ def find_tss(board: int, target: int) -> tuple[int, int, int] | None:
     return find_tspin(board, target, W - 3)
 
 
+def find_tst(board: int, target: int) -> tuple[int, int, int] | None:
+    """board に T を入れて target の 3 段を消す T-Spin Triple を探す。"""
+    return find_tspin(board, target, 3 * W - 4)
+
+
 def find_tspin(board: int, target: int, need: int) -> tuple[int, int, int] | None:
     """board に T を入れて、ちょうど target の段だけを消す T スピン (Mini は除く) を探す。
 
