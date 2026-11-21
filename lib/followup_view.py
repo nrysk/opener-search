@@ -141,6 +141,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   <select id="sort" aria-label="並び順">
     <option value="orders">組めるミノ順が多い順</option>
     <option value="height">低い順</option>
+    <option value="clean">きれいな順 (消去後の穴が少ない順)</option>
   </select>
 </div>
 <div class="controls" id="order-controls">
@@ -195,14 +196,18 @@ const byId = new Map();
 for (const gid of Object.keys(DATA)) {
   const g = DATA[gid];
   g.ord = g.first ? ORDERS.filter(o => o[0] === g.first) : ORDERS;
+  // before = [a, b] なら、a が b より先に来るミノ順だけを数える (ほかのミノ順はマップで薄く表示する)
+  g.valid = g.before ? g.ord.map(o => o.indexOf(g.before[0]) < o.indexOf(g.before[1])) : null;
+  g.total = g.valid ? g.valid.filter(Boolean).length : g.ord.length;
   const n = g.ord.length;
   for (const p of g.p) {
     p.gid = gid;
-    p.key = g.first ? g.first + ":" + p.id : p.id;  // 同じシルエットが複数のタブに出るので、タブごとに区別する
+    p.key = g.first || g.before ? gid + ":" + p.id : p.id;  // 同じシルエットが複数のタブに出るので、タブごとに区別する
     p.sides = p.s.map(ts => ({ts: ts.map(([f, o]) => ({f, st: decode(o, n)})), shown: 0}));
     p.st = new Uint8Array(n * p.sides.length);  // ミノ割りをまたいだ最良 (ソフトドロップ最少)
     p.sides.forEach((side, k) => side.ts.forEach(t => merge(p.st, t.st, k * n)));
     p.h = p.sides[0].ts[0].f.split("/").length;
+    p.holes = p.sides.reduce((n, side) => n + holes(afterClear(side.ts[0].f)), 0);
     byId.set(p.key, p);
   }
 }
@@ -226,8 +231,23 @@ function boardSvg(field, minRows) {
   return s + "</svg>";
 }
 
-// ライン消去後の地形: そろった段を取り除いて上の段を下ろす
-const afterClear = field => field.split("/").filter(line => line.includes("_")).join("/");
+// ライン消去後の地形: そろった段を取り除いて上の段を下ろす (読み込み時にも使うので関数宣言にしておく)
+function afterClear(field) {
+  return field.split("/").filter(line => line.includes("_")).join("/");
+}
+// 形のきれいさ: 盤面で、上 (同じ列のどこか) にブロックがある空白マスの数 (穴の数)。少ないほどきれい
+function holes(field) {
+  const lines = field.split("/");
+  let n = 0;
+  for (let x = 0; x < 10; x++) {
+    let covered = false;
+    for (const line of lines) {  // 上の段から見ていく
+      if (line[x] !== "_") covered = true;
+      else if (covered) n++;
+    }
+  }
+  return n;
+}
 
 // 04/board.html に貼れる形 (1 行 = 「タイトル<Tab>盤面」) にする。表示中のミノ割りと、消去前 / 後の状態をそのまま写す。
 // 開始形状のマス (小文字) も通常のミノの色にする
@@ -266,13 +286,13 @@ function copyText(text, button) {
 
 // ミノ順マップ: 1 番目のミノごとのブロック (6 個。始動ミノを固定したタブでは 1 個) x 2 番目のミノ (5 行) x 残り (24 列)
 const CW = 8, GAP = 4, GUT = 14, MAP_W = GUT + 24 * CW;
-function drawMap(canvas, st, maxSoft, off, ord) {
+function drawMap(canvas, st, maxSoft, off, ord, valid = null) {
   const dpr = window.devicePixelRatio || 1, css = getComputedStyle(document.documentElement);
   const v = name => css.getPropertyValue(name).trim();
   const nb = ord.length / 120, CH = nb === 1 ? 10 : 5, MAP_H = nb * 5 * CH + (nb - 1) * GAP;
   canvas.width = MAP_W * dpr; canvas.height = MAP_H * dpr;
   canvas.style.width = MAP_W + "px"; canvas.style.height = MAP_H + "px";
-  Object.assign(canvas, {st, maxSoft, off, ord, nb, ch: CH});
+  Object.assign(canvas, {st, maxSoft, off, ord, nb, ch: CH, valid});
   const g = canvas.getContext("2d");
   g.scale(dpr, dpr);
   g.font = "600 11px ui-monospace, Menlo, monospace";
@@ -283,9 +303,11 @@ function drawMap(canvas, st, maxSoft, off, ord) {
     g.fillStyle = v("--sub");
     g.fillText(ord[b * 120][0], 0, y0 + 5 * CH / 2);
     for (let r = 0; r < 5; r++) for (let c = 0; c < 24; c++) {
-      const s = st[off + b * 120 + r * 24 + c];
+      const i = b * 120 + r * 24 + c, s = st[off + i];
       g.fillStyle = !s || s - 1 > maxSoft ? cell : s === 1 ? ok : soft;
+      g.globalAlpha = valid && !valid[i] ? .25 : 1;  // 数えないミノ順は薄くする
       g.fillRect(GUT + c * CW, y0 + r * CH, CW - 1, CH - 1);
+      g.globalAlpha = 1;
     }
   }
 }
@@ -304,7 +326,7 @@ function mapsInto(el, st, maxSoft) {
     const canvas = document.createElement("canvas");
     canvas.className = "map";
     box.append(canvas);
-    drawMap(canvas, st, maxSoft, k * ord.length, ord);
+    drawMap(canvas, st, maxSoft, k * ord.length, ord, DATA[start].valid);
     return box;
   }));
 }
@@ -329,9 +351,9 @@ function card(p, maxSoft) {
   el.className = "card" + (on ? " pin" : "");
   const per = labels.map((_, k) => count(p.st, maxSoft, null, k * n, k * n + n));
   const title = multi ? labels.map((l, k) => `${l.slice(-1)} ${per[k]}`).join(" + ") + " 通りのミノ順" :
-    `${per[0]}${n < 720 ? " / " + n : ""} 通りのミノ順`;
+    `${per[0]}${DATA[p.gid].total < 720 ? " / " + DATA[p.gid].total : ""} 通りのミノ順`;
   el.innerHTML = `<h2><label><input type="checkbox" data-pin="${p.key}"${on ? " checked" : ""}>` +
-    `<span>${title} <small>· ${multi ? "" : labels[0] + " · "}${p.r} 段目${p.n ? " · " + p.n : ""}</small></span></label></h2>` +
+    `<span>${title} <small>· ${multi ? "" : labels[0] + " · "}${p.r} 段目 · 穴 ${p.holes}${p.n ? " · " + p.n : ""}</small></span></label></h2>` +
     `<div class="sides">` + p.sides.map((side, k) => {
       const t = side.ts[side.shown];
       return `<div class="side">` + (multi ? `<h4>${labels[k]}</h4>` : "") +
@@ -342,7 +364,7 @@ function card(p, maxSoft) {
           `<span>ミノ割り ${side.shown + 1} / ${side.ts.length} (この割り方で ${count(t.st, maxSoft)} 通り)</span>` : "") + `</div>` +
         `<canvas class="map"></canvas></div>`;
     }).join("") + `</div>`;
-  el.querySelectorAll("canvas").forEach((c, k) => drawMap(c, p.st, maxSoft, k * n, ord));
+  el.querySelectorAll("canvas").forEach((c, k) => drawMap(c, p.st, maxSoft, k * n, ord, DATA[p.gid].valid));
   return el;
 }
 
@@ -350,7 +372,7 @@ function card(p, maxSoft) {
 const pop = x => { x -= x >>> 1 & 0x55555555; x = (x & 0x33333333) + (x >>> 2 & 0x33333333); return (x + (x >>> 4) & 0x0f0f0f0f) * 0x01010101 >>> 24; };
 // ミノ順集合が同じシルエットはまとめて 1 回だけ比べる (全網羅の組数はまとめた数を掛けて数える)。
 // 上位の組には、まとめたうちの最も低いシルエットを代表として出す
-function bestPairs(usable, maxSoft) {
+function bestPairs(usable, maxSoft, total) {
   const same = new Map();  // ミノ順集合 -> {w, ps}
   for (const p of usable) {
     const w = new Uint32Array(Math.ceil(p.st.length / 32));
@@ -361,7 +383,7 @@ function bestPairs(usable, maxSoft) {
   }
   const uniq = [...same.values()];
   for (const u of uniq) u.ps.sort((a, b) => a.h - b.h);
-  const total = usable.length ? usable[0].st.length : 0, words = uniq.length ? uniq[0].w.length : 0;
+  const words = uniq.length ? uniq[0].w.length : 0;
   let full = 0;
   const top = [];  // [網羅数, p, q] を網羅数の多い順に TOP_PAIRS 個まで
   const offer = (n, p, q) => {
@@ -424,12 +446,12 @@ function draw() {
   }
   const maxSoft = Number($("maxsoft").value), rows = $("rows").value;
   const filtered = pat.some(Boolean);
-  const group = DATA[start], labels = group.l, n = group.ord.length, total = n * labels.length;
+  const group = DATA[start], labels = group.l, n = group.ord.length, total = group.total * labels.length;
   const match = group.ord.map(o => pat.every((p, i) => !p || o[i] === p));
   for (const id of ["grid", "pinned-grid"]) $(id).classList.toggle("wide", labels.length > 1);
 
   // 条件 (ソフトドロップ・段) を満たすシルエット。集計はミノ順の絞り込みをかける前の値で出す
-  const usable = [], union = new Uint8Array(total);
+  const usable = [], union = new Uint8Array(n * labels.length);
   for (const p of group.p) {
     if (rows && p.r !== rows) continue;
     if (!count(p.st, maxSoft)) continue;
@@ -441,7 +463,8 @@ function draw() {
     startsOf(group).map(([l, f]) => isEmpty(f) ? "" :
       `<div class="stat">${boardSvg(f, 2)}<span>開始形状 ${l}</span></div>`).join("") + [
       [usable.length, labels.length > 1 ? "A・B 共通のシルエット" : "シルエット"],
-      [`${covered} / ${total}`, "__SPIN__ を打てるミノ順" + (labels.length > 1 ? ` (A ${n} + B ${n})` : group.first ? ` (${group.first} 始動)` : "")],
+      [`${covered} / ${total}`, "__SPIN__ を打てるミノ順" + (labels.length > 1 ? ` (A ${n} + B ${n})` : group.first ? ` (${group.first} 始動)` :
+        group.before ? ` (${group.before[0]} が ${group.before[1]} より先)` : "")],
       [`${count(union, 0)} / ${total}`, "うちソフトドロップなし"],
       [`${total - covered} / ${total}`, "打てないミノ順"],
     ].map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
@@ -449,7 +472,7 @@ function draw() {
 
   // 2 つの組み合わせ (シルエットが多いと重いので、条件ごとに 1 回だけ計算する)
   const pairKey = `${start}|${maxSoft}|${rows}`;
-  if (!pairCache.has(pairKey)) pairCache.set(pairKey, bestPairs(usable, maxSoft));
+  if (!pairCache.has(pairKey)) pairCache.set(pairKey, bestPairs(usable, maxSoft, total));
   const pairs = pairCache.get(pairKey);
   $("pairs-text").innerHTML = pairs.top.length === 0 ? "シルエットが 2 つ以上ありません。" :
     pairs.full ? `2 つで全 ${total} 通りを網羅できる組: <b>${pairs.full} 組</b>` :
@@ -467,6 +490,7 @@ function draw() {
   // ミノ順で絞り込んでも、並び順はシルエット全体の「組めるミノ順の数」を使う
   const list = usable.filter(p => !filtered || count(p.st, maxSoft, match)).map(p => [p, count(p.st, maxSoft)]);
   if ($("sort").value === "height") list.sort((a, b) => a[0].h - b[0].h || b[1] - a[1]);
+  else if ($("sort").value === "clean") list.sort((a, b) => a[0].holes - b[0].holes || b[1] - a[1] || a[0].h - b[0].h);
   else list.sort((a, b) => b[1] - a[1] || a[0].h - b[0].h);
 
   $("grid").replaceChildren(...list.slice(0, limit).map(([p]) => card(p, maxSoft)));
@@ -479,7 +503,7 @@ function draw() {
   $("pinned").hidden = mine.length === 0;
   $("pinned-title").textContent = `チェックしたシルエット (${mine.length})`;
   $("pinned-grid").replaceChildren(...mine.map(p => card(p, maxSoft)));
-  const pu = new Uint8Array(total);
+  const pu = new Uint8Array(n * labels.length);
   for (const p of mine) merge(pu, p.st);
   const pc = count(pu, maxSoft);
   $("coverage-text").innerHTML = `チェックしたシルエットで網羅できるミノ順: <b>${pc} / ${total}</b> (${Math.round(pc / total * 100)}%)` +
@@ -556,7 +580,8 @@ main.addEventListener("mousemove", e => {
   tip.hidden = i < 0;
   if (i < 0) return;
   const s = e.target.st[e.target.off + i], ok = s && s - 1 <= e.target.maxSoft;
-  tip.textContent = e.target.ord[i] + (!ok ? ": 組めない" : s === 1 ? ": ソフトドロップなし" : `: ソフトドロップ ${s - 1} 回`);
+  tip.textContent = e.target.ord[i] + (e.target.valid && !e.target.valid[i] ? ": 数えないミノ順" :
+    !ok ? ": 組めない" : s === 1 ? ": ソフトドロップなし" : `: ソフトドロップ ${s - 1} 回`);
   tip.style.left = Math.min(e.clientX + 12, window.innerWidth - 220) + "px";
   tip.style.top = e.clientY + 14 + "px";
 });
@@ -598,6 +623,7 @@ def group(
     members: list[list[dict]],
     first: str | None = None,
     starts: list[tuple[str, str]] | None = None,
+    before: tuple[str, str] | None = None,
 ) -> dict:
     """タブ 1 つ分のデータ。
 
@@ -608,10 +634,13 @@ def group(
     (members のミノ順はそのミノで始まるものだけにしておく)。
     starts ([(名前, 形), ...]) を指定すると、いくつかの開始形状のシルエットをまとめた 1 つのタブとして、
     その開始形状をすべて表示する (どれかから組めればよい、という見方。各パターンの note に開始形状の名前を入れておく)。
+    before ((a, b)) を指定すると、a が b より先に来るミノ順だけを数えるタブになる
+    (members のミノ順はその条件を満たすものだけにしておく。ほかのミノ順はマップで薄く表示する)。
     """
     return {
         **({"first": first} if first else {}),
         **({"starts": [list(s) for s in starts]} if starts else {}),
+        **({"before": list(before)} if before else {}),
         "l": labels,
         "f": fields,
         "p": [

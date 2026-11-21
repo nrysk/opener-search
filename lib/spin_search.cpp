@@ -1,10 +1,13 @@
 // lib/followup.py の盤面探索 (重い部分) の C++ 版。ミノ操作と T スピン判定は lib/srs.py と同じ規則。
 //
 // 開始形状に 6 ミノ (I J L S Z O) を来た順にホールドなしで置き、最後の T で
-// row 段目 (0 始まり) から lines 段を T スピン (Mini は除く) で消せる盤面をすべて求める。
+// 指定した段 (0 始まり。連続していなくてもよい。例: 1,3 は 3 段目を残して 2・4 段目を消す TSD) を
+// T スピン (Mini は除く) でちょうど消せる盤面をすべて求める。
 // (使ったミノの集合, 盤面) を状態として、そこに到達できるミノ順の集合を手数ごとに求める。
 //
-// 使い方: spin_search <開始形状 (16 進)> <row> <lines> <max_height>
+// 使い方: spin_search <開始形状 (16 進)> <消す段 (0 始まり、カンマ区切り)> <max_height> [overhang]
+// overhang はミノの文字の並び (例: "I"、"IJLSZO")。そのミノは 1 マス以上が max_height 段以内にあれば上にはみ出してよい
+// ("-" や省略ならどのミノもはみ出せない)
 // 出力: 1 行 = "<盤面 (16 進)> <ミノ順集合 (2 進 720 桁)>"。ミノ順集合のビットの意味は
 //       lib/followup.py の ORDER_BIT と同じ (k 手目に未使用ミノの何番目を選んだかを WEIGHT で重み付け)。
 // T の位置はここでは出さない (Python 側で lib/srs.py の find_tspin を使って求め直す)。
@@ -239,20 +242,41 @@ std::string to_hex(u128 v) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 5) {
-        std::fprintf(stderr, "usage: %s <start-hex> <row> <lines> <max_height>\n", argv[0]);
+    if (argc != 4 && argc != 5) {
+        std::fprintf(stderr, "usage: %s <start-hex> <rows> <max_height> [overhang]\n", argv[0]);
         return 2;
     }
     u128 start = parse_hex(argv[1]);
-    int row = std::atoi(argv[2]), lines = std::atoi(argv[3]), max_height = std::atoi(argv[4]);
+    std::vector<int> rows;
+    for (const char* q = argv[2]; *q;) {
+        rows.push_back(std::atoi(q));
+        while (*q && *q != ',') q++;
+        if (*q == ',') q++;
+    }
+    std::sort(rows.begin(), rows.end());
+    int max_height = std::atoi(argv[3]);
+    std::string overhang = argc == 5 ? argv[4] : "";
     if (max_height > MAX_HEIGHT_LIMIT) {
         std::fprintf(stderr, "max_height は %d 以下\n", MAX_HEIGHT_LIMIT);
         return 2;
     }
-    // T を置く前に消す段の中で埋まっている必要があるマス数 (TSS は 10 - 3、TSD は 20 - 4、TST は 30 - 4)
-    int need = lines * W - (lines == 1 ? 3 : 4);
+    // はみ出しを許すと積みが最大 max_height + 3 段になり、その上に出現と回転の余白 (3 段) が要る
+    if (overhang.find_first_not_of('-') != std::string::npos && max_height + 6 > H) {
+        std::fprintf(stderr, "はみ出しを許すときの max_height は %d 以下\n", H - 6);
+        return 2;
+    }
+    // T を置く前に消す段の中で埋まっている必要があるマス数 = 段数 x 10 - (T が消す段に入れる最大のマス数)。
+    // 連続した 1 / 2 / 3 段は 3 / 4 / 4 (TSS / TSD / TST)、1 段あけた 2 段 (縦向きの T) は 2
+    int lines = (int)rows.size(), need;
+    bool contiguous = rows.back() - rows.front() == lines - 1;
+    if (contiguous && lines <= 3) need = lines * W - (lines == 1 ? 3 : 4);
+    else if (lines == 2 && rows[1] - rows[0] == 2) need = 2 * W - 2;
+    else {
+        std::fprintf(stderr, "T スピンでは消せない段の組み合わせです\n");
+        return 2;
+    }
     u128 target = 0;
-    for (int i = 0; i < lines; i++) target |= row_mask(row + i);
+    for (int r : rows) target |= row_mask(r);
     int max_outside = popcount(start) + 24 - need;  // 消す段の外に置けるブロック数の上限
     u128 limit = ((u128)1 << (max_height * W)) - 1;
 
@@ -279,7 +303,9 @@ int main(int argc, char** argv) {
                     auto& dst = next[used | 1 << ci];
                     for (u128 m : pieces[ci].placements(board, seen)) {
                         u128 nb = board | m;
-                        if (nb > limit || popcount(nb & ~target) > max_outside) continue;
+                        // 高さの上限。overhang に含まれるミノは、一部が上限内にあればはみ出してよい
+                        bool over = overhang.find(NAMES[ci]) != std::string::npos ? !(m & limit) : (m & ~limit) != 0;
+                        if (over || popcount(nb & ~target) > max_outside) continue;
                         // 残りのミノを全部消す段に入れても、T の前に need マス埋まらないなら打ち切る
                         if (popcount(nb & target) + 4 * (5 - k) < need) continue;
                         // T より前にラインが消えてはいけない

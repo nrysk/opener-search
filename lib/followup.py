@@ -70,29 +70,50 @@ NEED = {1: W - 3, 2: 2 * W - 4, 3: 3 * W - 4}
 SPIN = {1: "TSS", 2: "TSD", 3: "TST"}
 
 
-def rows_label(row: int, lines: int) -> str:
-    """消す段の表記 (1 始まり)。TSS は "1"、TSD は "1-2"、TST は "1-3"。"""
-    return f"{row + 1}-{row + lines}" if lines > 1 else str(row + 1)
+def is_contiguous(rows: tuple[int, ...]) -> bool:
+    return rows[-1] - rows[0] == len(rows) - 1
 
 
-def silhouettes(start: int, row: int, max_height: int, lines: int = 2) -> list[tuple[int, int, int, int]]:
-    """row 段目 (0 始まり) から lines 段を T スピンで消せる (盤面, ミノ順集合, T のマスク, T の向き) の一覧。
+def need_for(rows: tuple[int, ...]) -> int:
+    """消す段 rows (0 始まり) に対し、T を置く前に埋まっている必要があるマス数。
+
+    連続した段は NEED。1 段あけた 2 段 (縦向きの T で上下の段だけを消す TSD) は T が各段に 1 マスしか入らないので 18。
+    """
+    return NEED[len(rows)] if is_contiguous(rows) else len(rows) * W - len(rows)
+
+
+def rows_label(rows: tuple[int, ...]) -> str:
+    """消す段の表記 (1 始まり)。TSS は "1"、TSD は "1-2"、TST は "1-3"、あいだの段を残す TSD は "2,4"。"""
+    if not is_contiguous(rows):
+        return ",".join(str(r + 1) for r in rows)
+    return f"{rows[0] + 1}-{rows[-1] + 1}" if len(rows) > 1 else str(rows[0] + 1)
+
+
+def rows_id(rows: tuple[int, ...]) -> str:
+    """シルエット id に入れる消す段。連続した段は一番下の段 (1 始まり)、そうでなければ "2_4" のように並べる。"""
+    return str(rows[0] + 1) if is_contiguous(rows) else "_".join(str(r + 1) for r in rows)
+
+
+def silhouettes(
+    start: int, rows: tuple[int, ...], max_height: int, overhang: str = ""
+) -> list[tuple[int, int, int, int]]:
+    """段 rows (0 始まり) を T スピンでちょうど消せる (盤面, ミノ順集合, T のマスク, T の向き) の一覧。
 
     盤面とミノ順集合は C++ (lib/spin_search.cpp) で求め、T の位置はここで find_tspin を使って求める。
     """
     target = 0
-    for i in range(lines):
-        target |= ROWS[row + i]
+    for r in rows:
+        target |= ROWS[r]
     res = subprocess.run(
-        [str(spin_search_binary()), f"{start:x}", str(row), str(lines), str(max_height)],
+        [str(spin_search_binary()), f"{start:x}", ",".join(map(str, rows)), str(max_height), overhang or "-"],
         capture_output=True, text=True, check=True,
     )
     out = []
     for line in res.stdout.splitlines():
         board_hex, orders_bin = line.split()
         board = int(board_hex, 16)
-        hit = find_tspin(board, target, NEED[lines])
-        assert hit is not None, (row, board_hex)
+        hit = find_tspin(board, target, need_for(rows))
+        assert hit is not None, (rows, board_hex)
         out.append((board, int(orders_bin, 2), hit[0], hit[1]))
     return out
 
@@ -167,13 +188,13 @@ def buildable_orders(start: int, tiling: dict[str, int]) -> dict[str, str]:
 
 def field_string(start_field: str, tiling: dict[str, int], t_mask: int, max_height: int) -> str:
     """上の段から '/' 区切り。開始形状のマスは小文字、この巡のミノと T は大文字。"""
-    grid = [["_"] * W for _ in range(max_height + 1)]
+    grid = [["_"] * W for _ in range(H)]  # I ミノがはみ出す場合もあるので盤面の高さぶん用意して、上の空行を落とす
     for y, row in enumerate(reversed(start_field.split("/"))):
         for x, c in enumerate(row):
             if c != "_":
                 grid[y][x] = c.lower()
     for c, m in list(tiling.items()) + [("T", t_mask)]:
-        for i in range((max_height + 1) * W):
+        for i in range(H * W):
             if m >> i & 1:
                 grid[i // W][i % W] = c
     lines = ["".join(r) for r in reversed(grid)]
@@ -182,14 +203,26 @@ def field_string(start_field: str, tiling: dict[str, int], t_mask: int, max_heig
     return "/".join(lines)
 
 
-def solve(task: tuple[str, str, int, int, int]) -> list[dict]:
-    sid, start_field, row, max_height, lines = task
+def fits_height(tiling: dict[str, int], max_height: int, overhang: str) -> bool:
+    """ミノ割りが高さの上限を守っているか。overhang に含まれるミノは、一部が上限内にあればはみ出してよい。"""
+    limit = (1 << (max_height * W)) - 1
+    return all(
+        (m & limit) != 0 if c in overhang else m & ~limit == 0
+        for c, m in tiling.items()
+    )
+
+
+def solve(task: tuple[str, str, tuple[int, ...], int, str]) -> list[dict]:
+    sid, start_field, rows, max_height, overhang = task
     start = parse_board(start_field)
     out = []
-    for n, (board, orders, t_mask, t_rot) in enumerate(sorted(silhouettes(start, row, max_height, lines))):
+    for n, (board, orders, t_mask, t_rot) in enumerate(sorted(silhouettes(start, rows, max_height, overhang))):
         expected = {o for o in ORDERS if orders >> ORDER_BIT[o] & 1}
         found: set[str] = set()
         for tiling in tilings(board ^ start):
+            # 同じシルエットでも、はみ出してよくないミノが高さの上限をはみ出すミノ割りは使えない
+            if not fits_height(tiling, max_height, overhang):
+                continue
             ok = buildable_orders(start, tiling)
             if not ok:
                 continue
@@ -198,8 +231,8 @@ def solve(task: tuple[str, str, int, int, int]) -> list[dict]:
                 {
                     "start": sid,
                     "start_field": start_field,
-                    ROWS_COLUMN[lines]: rows_label(row, lines),
-                    "silhouette": f"{sid}-{row + 1}-{n + 1:03d}",
+                    ROWS_COLUMN[len(rows)]: rows_label(rows),
+                    "silhouette": f"{sid}-{rows_id(rows)}-{n + 1:03d}",
                     "t_rotation": "0R2L"[t_rot],
                     "orders_count": len(ok),
                     "field": field_string(start_field, tiling, t_mask, max_height),
@@ -207,7 +240,7 @@ def solve(task: tuple[str, str, int, int, int]) -> list[dict]:
                 }
             )
         # 2 つの方法 (盤面の探索とミノ割りごとの確認) で求めたミノ順が一致するはず
-        assert found == expected, (sid, row, n, len(found), len(expected))
+        assert found == expected, (sid, rows, n, len(found), len(expected))
     return out
 
 
@@ -216,11 +249,19 @@ ROWS_COLUMN = {1: "tss_rows", 2: "tsd_rows", 3: "tst_rows"}
 
 
 def run(
-    starts: dict[str, str], max_height: int, csv_path: Path, processes: int, lines: int = 2, spin_rows: list[int] | None = None
+    starts: dict[str, str],
+    max_height: int,
+    csv_path: Path,
+    processes: int,
+    lines: int = 2,
+    spin_rows: list[int | tuple[int, ...]] | None = None,
+    overhang: str = "",
 ) -> None:
     """全開始形状 x 消す段を並列に探索し、csv_path に書き出して要約を表示する。
 
-    spin_rows は調べる消す段 (下の段、1 始まり)。省略時は 1 段目から (max_height-1) 段目まで。
+    spin_rows は調べる消す段 (1 始まり) の一覧。整数は一番下の段で、そこから lines 段を消す。
+    タプルは消す段そのもの (例: (2, 4) は 3 段目を残して 2・4 段目を消す TSD)。省略時は 1 段目から (max_height-1) 段目まで。
+    overhang はミノの文字の並び (例: "I"、"IJLSZO")。そのミノは一部が max_height 段以内にあれば上にはみ出してよい。
     """
     spin = SPIN[lines]
     parser = argparse.ArgumentParser()
@@ -229,8 +270,11 @@ def run(
     parser.add_argument("--keep", action="store_true", help="--only と併用: 既存の CSV にある他の開始形状の行を残す")
     args = parser.parse_args()
     sids = args.only or list(starts)
-    rows = [r - 1 for r in args.rows or spin_rows or range(1, max_height)]
-    tasks = [(sid, starts[sid], row, max_height, lines) for sid in sids for row in rows]
+    rows = [
+        tuple(x - 1 for x in r) if isinstance(r, tuple) else tuple(range(r - 1, r - 1 + lines))
+        for r in args.rows or spin_rows or range(1, max_height)
+    ]
+    tasks = [(sid, starts[sid], r, max_height, overhang) for sid in sids for r in rows]
 
     spin_search_binary()  # 並列実行の前に一度だけビルドしておく
     began = time.time()
@@ -258,8 +302,8 @@ def run(
         covered = {o.split(":")[0] for r in mine for o in r["orders"].split()}
         hard = {o for r in mine for o in r["orders"].split() if ":" not in o}
         per_row = ", ".join(
-            f"{rows_label(row, lines)} 段目 {len({r['silhouette'] for r in mine if r[ROWS_COLUMN[lines]] == rows_label(row, lines)})}"
-            for row in rows
+            f"{rows_label(t)} 段目 {len({r['silhouette'] for r in mine if r[ROWS_COLUMN[lines]] == rows_label(t)})}"
+            for t in rows
         )
         print(
             f"{sid}: シルエット {len({r['silhouette'] for r in mine})} 種類 ({per_row}), "
